@@ -116,10 +116,6 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	case <-r.Context().Done():
 		return
-
-	case <-time.After(5 * time.Minute):
-		http.Error(w, "Request timeout", http.StatusGatewayTimeout)
-		return
 	}
 }
 

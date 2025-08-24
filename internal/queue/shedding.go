@@ -7,7 +7,7 @@ import (
 )
 
 func (q *Queue) startMaintenanceWorker() {
-	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds
+	ticker := time.NewTicker(5 * time.Second)
 
 	go func() {
 		defer ticker.Stop()
@@ -29,13 +29,10 @@ func (q *Queue) performMaintenance() {
 	for upstreamName, pq := range q.queues {
 		newQueue := &PriorityQueue{}
 
-		// Rebuild queue without expired/shed requests
 		for pq.Len() > 0 {
-			req := (*pq)[0] // Peek at top
+			req := (*pq)[0]
 
-			// Check if should be shed
 			if q.shouldShedRequestUnsafe(req) {
-				// Remove and send error response
 				heap.Pop(pq)
 				req.ResponseChan <- &Response{
 					Error: fmt.Errorf("request shed due to overload"),
@@ -43,30 +40,25 @@ func (q *Queue) performMaintenance() {
 				}
 				req.Cancel()
 			} else {
-				// Keep the request
 				heap.Push(newQueue, heap.Pop(pq))
 			}
 		}
 
 		q.queues[upstreamName] = newQueue
 
-		// Queue maintenance completed
 	}
 }
 
 func (q *Queue) shouldShedRequestUnsafe(req *Request) bool {
-	// Get config for this upstream
 	cfg, exists := q.configs[req.UpstreamName]
 	if !exists {
-		return true // Shed if no config
+		return true
 	}
 	
-	// Age-based shedding
 	if time.Since(req.EnqueuedAt) > cfg.RequestMaxAge {
 		return true
 	}
 
-	// Context cancelled
 	select {
 	case <-req.Context().Done():
 		return true

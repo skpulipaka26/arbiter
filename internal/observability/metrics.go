@@ -1,9 +1,8 @@
-package metrics
+package observability
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -16,22 +15,18 @@ import (
 )
 
 type OTELMetrics struct {
-	// Counters
 	requestsTotal   metric.Int64Counter
 	requestsShed    metric.Int64Counter
 	requestsFailed  metric.Int64Counter
 	batchesTotal    metric.Int64Counter
 	
-	// Histograms
 	requestDuration metric.Float64Histogram
 	queueTime       metric.Float64Histogram
 	batchSize       metric.Int64Histogram
 	
-	// Gauges (using callbacks)
 	queueSize       metric.Int64ObservableGauge
 	activeRequests  metric.Int64ObservableGauge
 	
-	// Attributes
 	upstreamAttr   attribute.Key
 	priorityAttr   attribute.Key
 	modeAttr       attribute.Key
@@ -41,17 +36,14 @@ type OTELMetrics struct {
 var otelInstance *OTELMetrics
 
 func InitOTEL() (*OTELMetrics, metric.Meter, error) {
-	// Create Prometheus exporter
 	exporter, err := prometheus.New()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create prometheus exporter: %w", err)
 	}
 	
-	// Create meter provider
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	otel.SetMeterProvider(provider)
 	
-	// Get meter
 	meter := provider.Meter("arbiter")
 	
 	m := &OTELMetrics{
@@ -61,7 +53,6 @@ func InitOTEL() (*OTELMetrics, metric.Meter, error) {
 		statusAttr:   attribute.Key("status"),
 	}
 	
-	// Create counters
 	m.requestsTotal, err = meter.Int64Counter(
 		"arbiter_requests_total",
 		metric.WithDescription("Total number of requests processed"),
@@ -98,7 +89,6 @@ func InitOTEL() (*OTELMetrics, metric.Meter, error) {
 		return nil, nil, err
 	}
 	
-	// Create histograms
 	m.requestDuration, err = meter.Float64Histogram(
 		"arbiter_request_duration_seconds",
 		metric.WithDescription("Request processing duration in seconds"),
@@ -126,7 +116,6 @@ func InitOTEL() (*OTELMetrics, metric.Meter, error) {
 		return nil, nil, err
 	}
 	
-	// Create observable gauges
 	m.queueSize, err = meter.Int64ObservableGauge(
 		"arbiter_queue_size",
 		metric.WithDescription("Current queue size"),
@@ -149,7 +138,6 @@ func InitOTEL() (*OTELMetrics, metric.Meter, error) {
 	return m, meter, nil
 }
 
-// Record methods
 func (m *OTELMetrics) RecordRequest(ctx context.Context, upstream, priority string, duration time.Duration, status string) {
 	attrs := []attribute.KeyValue{
 		m.upstreamAttr.String(upstream),
@@ -193,9 +181,7 @@ func (m *OTELMetrics) RecordBatch(ctx context.Context, upstream string, size int
 	m.batchSize.Record(ctx, size, metric.WithAttributes(attrs...))
 }
 
-// RegisterCallbacks registers callbacks for observable metrics
 func (m *OTELMetrics) RegisterCallbacks(meter metric.Meter, getQueueSizes func() map[string]map[string]int64, getActiveRequests func() map[string]int64) error {
-	// Register queue size callback
 	_, err := meter.RegisterCallback(
 		func(ctx context.Context, observer metric.Observer) error {
 			sizes := getQueueSizes()
@@ -216,7 +202,6 @@ func (m *OTELMetrics) RegisterCallbacks(meter metric.Meter, getQueueSizes func()
 		return fmt.Errorf("failed to register queue size callback: %w", err)
 	}
 	
-	// Register active requests callback
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, observer metric.Observer) error {
 			active := getActiveRequests()
@@ -237,30 +222,11 @@ func (m *OTELMetrics) RegisterCallbacks(meter metric.Meter, getQueueSizes func()
 	return nil
 }
 
-// GetOTEL returns the singleton OTEL metrics instance
 func GetOTEL() *OTELMetrics {
 	return otelInstance
 }
 
-// Handler returns the Prometheus metrics handler
 func Handler() http.Handler {
 	return promhttp.Handler()
 }
 
-// StartMetricsServer starts a standalone metrics server
-func StartMetricsServer(port int) {
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", Handler())
-	
-	addr := fmt.Sprintf(":%d", port)
-	log.Printf("Starting metrics server on %s", addr)
-	
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
-	
-	if err := server.ListenAndServe(); err != nil {
-		log.Printf("Metrics server error: %v", err)
-	}
-}

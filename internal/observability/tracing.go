@@ -1,4 +1,4 @@
-package metrics
+package observability
 
 import (
 	"context"
@@ -19,7 +19,7 @@ var tracer trace.Tracer
 func InitTracing(ctx context.Context, serviceName string, tempoEndpoint string) (*sdktrace.TracerProvider, error) {
 	exporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpoint(tempoEndpoint),
-		otlptracehttp.WithInsecure(), // Use WithInsecure for non-TLS endpoints
+		otlptracehttp.WithInsecure(),
 		otlptracehttp.WithTimeout(5*time.Second),
 	)
 
@@ -52,13 +52,6 @@ func InitTracing(ctx context.Context, serviceName string, tempoEndpoint string) 
 	return tp, nil
 }
 
-func GetTracer() trace.Tracer {
-	if tracer == nil {
-		return otel.Tracer("arbiter")
-	}
-	return tracer
-}
-
 func ExtractTraceID(ctx context.Context) string {
 	span := trace.SpanFromContext(ctx)
 	if span.SpanContext().IsValid() {
@@ -68,18 +61,8 @@ func ExtractTraceID(ctx context.Context) string {
 }
 
 func StartSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
-	return GetTracer().Start(ctx, name,
-		trace.WithAttributes(attrs...),
-	)
-}
-
-func RecordError(ctx context.Context, err error, description string) {
-	span := trace.SpanFromContext(ctx)
-	if span.IsRecording() {
-		span.RecordError(err,
-			trace.WithAttributes(
-				attribute.String("error.description", description),
-			),
-		)
+	if tracer == nil {
+		return otel.Tracer("arbiter").Start(ctx, name, trace.WithAttributes(attrs...))
 	}
+	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 }

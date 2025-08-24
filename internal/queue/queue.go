@@ -81,7 +81,6 @@ func (r *Request) Cancel() {
 	}
 }
 
-// Priority queue implementation
 type PriorityQueue []*Request
 
 func (pq PriorityQueue) Len() int { return len(pq) }
@@ -91,12 +90,10 @@ func (pq PriorityQueue) Less(i, j int) bool {
 		return pq[i] != nil
 	}
 
-	// Higher priority (lower numeric value) goes first
 	if pq[i].Priority != pq[j].Priority {
 		return pq[i].Priority < pq[j].Priority
 	}
 
-	// FIFO for same priority
 	return pq[i].EnqueuedAt.Before(pq[j].EnqueuedAt)
 }
 
@@ -125,7 +122,6 @@ func (pq *PriorityQueue) Peek() *Request {
 	return (*pq)[0]
 }
 
-// Queue manager
 type Queue struct {
 	queues   map[string]*PriorityQueue
 	configs  map[string]*config.QueueConfig // Per-upstream configs
@@ -140,18 +136,15 @@ func New(upstreams []config.Upstream) *Queue {
 		stopChan: make(chan struct{}),
 	}
 
-	// Store config for each upstream
 	for i := range upstreams {
 		q.configs[upstreams[i].Name] = &upstreams[i].Queue
 	}
 
-	// Start background maintenance for queue shedding
 	q.startMaintenanceWorker()
 
 	return q
 }
 
-// Shutdown stops the queue manager gracefully
 func (q *Queue) Shutdown() {
 	close(q.stopChan)
 }
@@ -160,7 +153,6 @@ func (q *Queue) Enqueue(req *Request) error {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 
-	// Get or create queue for upstream
 	pq, exists := q.queues[req.UpstreamName]
 	if !exists {
 		pq = &PriorityQueue{}
@@ -168,13 +160,11 @@ func (q *Queue) Enqueue(req *Request) error {
 		q.queues[req.UpstreamName] = pq
 	}
 
-	// Get config for this upstream
 	cfg, exists := q.configs[req.UpstreamName]
 	if !exists {
 		return fmt.Errorf("no config for upstream: %s", req.UpstreamName)
 	}
 
-	// Check if request should be shed (use internal length since we have lock)
 	queueSize := pq.Len()
 	if queueSize > cfg.LowPriorityShedAt && req.Priority == Low {
 		return fmt.Errorf("request shed due to overload")
@@ -210,7 +200,6 @@ func (q *Queue) Length(upstreamName string) int {
 	return 0
 }
 
-// Helper functions
 func extractPriority(req *http.Request) Priority {
 	priority := strings.ToLower(strings.TrimSpace(req.Header.Get("Priority")))
 
@@ -222,7 +211,7 @@ func extractPriority(req *http.Request) Priority {
 	case "low", "background", "batch":
 		return Low
 	default:
-		return Low // Default to low priority
+		return Low
 	}
 }
 
@@ -232,12 +221,10 @@ func extractUpstream(req *http.Request) string {
 		return "default"
 	}
 
-	// Basic validation
 	if len(upstream) > 100 {
 		return "default"
 	}
 
-	// Only allow alphanumeric, dash, underscore
 	for _, r := range upstream {
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
 			(r >= '0' && r <= '9') || r == '-' || r == '_') {

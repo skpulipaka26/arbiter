@@ -22,17 +22,14 @@ type Tracing struct {
 type Upstream struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
-	Mode string `yaml:"mode"` // "individual" or "batch"
+	Mode string `yaml:"mode"`
 
-	// Batch settings (only used if mode = "batch")
 	BatchSize    int           `yaml:"batch_size,omitempty"`
 	BatchTimeout time.Duration `yaml:"batch_timeout,omitempty"`
 
-	// Capacity settings
 	MaxConcurrent int           `yaml:"max_concurrent"`
 	Timeout       time.Duration `yaml:"timeout"`
 
-	// Queue settings
 	Queue QueueConfig `yaml:"queue"`
 }
 
@@ -54,7 +51,6 @@ func Load(filename string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	// Set defaults
 	if config.Port == 0 {
 		config.Port = 8080
 	}
@@ -70,7 +66,6 @@ func Load(filename string) (*Config, error) {
 			config.Upstreams[i].Mode = "individual"
 		}
 
-		// Set queue defaults
 		if config.Upstreams[i].Queue.MaxSize == 0 {
 			config.Upstreams[i].Queue.MaxSize = 1024
 		}

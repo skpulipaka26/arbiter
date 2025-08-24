@@ -7,7 +7,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -162,10 +161,6 @@ func runLoadTest(config *LoadTestConfig) []TestResult {
 			for requestID := range requestChan {
 				result := sendRequest(requestID, config)
 				resultsChan <- result
-
-				if requestID%50 == 0 {
-					fmt.Printf("Worker %d: Completed request %d\n", workerID, requestID)
-				}
 			}
 		}(i)
 	}
@@ -368,9 +363,6 @@ func printResults(stats TestStats) {
 }
 
 func main() {
-	fmt.Println("Arbiter Load Test")
-	fmt.Println("====================")
-
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get("http://localhost:8080/health")
 	if err != nil {
@@ -382,39 +374,15 @@ func main() {
 		log.Fatalf("Arbiter not healthy: status %d\n", resp.StatusCode)
 	}
 
-	fmt.Println("Arbiter is healthy, starting load test...")
-
 	config := &LoadTestConfig{
 		TotalRequests:   5000,
 		ConcurrentUsers: 100,
 		ArbiterURL:      "http://localhost:8080",
 	}
 
-	fmt.Printf("Test Configuration:\n")
-	fmt.Printf("  Total Requests: %d\n", config.TotalRequests)
-	fmt.Printf("  Concurrent Users: %d\n", config.ConcurrentUsers)
-	fmt.Printf("  Target: %s\n", config.ArbiterURL)
-	fmt.Printf("  Priority Distribution: 10%% high, 20%% medium, 70%% low\n")
-	fmt.Printf("  Upstream Distribution: 60%% individual, 30%% batch, 10%% default\n")
-	fmt.Printf("\n")
-
-	startTime := time.Now()
 	results := runLoadTest(config)
-	totalTime := time.Since(startTime)
-
-	fmt.Printf("Load test completed in %v\n", totalTime)
-	fmt.Printf("Collected %d results\n", len(results))
 
 	stats := analyzeResults(results)
 	printResults(stats)
 
-	jsonData, err := json.MarshalIndent(stats, "", "  ")
-	if err == nil {
-		filename := fmt.Sprintf("arbiter_loadtest_%d.json", time.Now().Unix())
-		if err := os.WriteFile(filename, jsonData, 0644); err == nil {
-			fmt.Printf("Detailed results saved to %s\n", filename)
-		}
-	}
-
-	fmt.Println("Load test completed successfully!")
 }

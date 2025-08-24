@@ -3,13 +3,11 @@ package logger
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"maps"
 	"os"
 	"time"
 
-	"arbiter/internal/metrics"
+	"arbiter/internal/observability"
 )
 
 type Logger struct {
@@ -20,7 +18,6 @@ type Logger struct {
 type LogLevel string
 
 const (
-	DEBUG LogLevel = "DEBUG"
 	INFO  LogLevel = "INFO"
 	WARN  LogLevel = "WARN"
 	ERROR LogLevel = "ERROR"
@@ -45,14 +42,7 @@ func Init(service string) {
 	}
 }
 
-func New(service string) *Logger {
-	return &Logger{
-		service: service,
-		logger:  log.New(os.Stdout, "", 0),
-	}
-}
-
-func WithContext(ctx context.Context) *LogContext {
+func FromContext(ctx context.Context) *LogContext {
 	return &LogContext{
 		ctx:    ctx,
 		logger: defaultLogger,
@@ -60,12 +50,8 @@ func WithContext(ctx context.Context) *LogContext {
 	}
 }
 
-func FromContext(ctx context.Context) *LogContext {
-	return WithContext(ctx)
-}
-
 func Default() *LogContext {
-	return WithContext(context.Background())
+	return FromContext(context.Background())
 }
 
 type LogContext struct {
@@ -77,15 +63,6 @@ type LogContext struct {
 func (lc *LogContext) WithField(key string, value interface{}) *LogContext {
 	lc.fields[key] = value
 	return lc
-}
-
-func (lc *LogContext) WithFields(fields map[string]interface{}) *LogContext {
-	maps.Copy(lc.fields, fields)
-	return lc
-}
-
-func (lc *LogContext) Debug(message string) {
-	lc.log(DEBUG, message)
 }
 
 func (lc *LogContext) Info(message string) {
@@ -100,10 +77,6 @@ func (lc *LogContext) Error(message string) {
 	lc.log(ERROR, message)
 }
 
-func (lc *LogContext) Errorf(format string, args ...interface{}) {
-	lc.log(ERROR, fmt.Sprintf(format, args...))
-}
-
 func (lc *LogContext) log(level LogLevel, message string) {
 	entry := LogEntry{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -114,7 +87,7 @@ func (lc *LogContext) log(level LogLevel, message string) {
 	}
 
 	if lc.ctx != nil {
-		traceID := metrics.ExtractTraceID(lc.ctx)
+		traceID := observability.ExtractTraceID(lc.ctx)
 		if traceID != "" {
 			entry.TraceID = traceID
 		}

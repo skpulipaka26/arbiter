@@ -10,15 +10,13 @@ import (
 
 	"arbiter/internal/config"
 	"arbiter/internal/logger"
-	"arbiter/internal/metrics"
+	"arbiter/internal/observability"
 	"arbiter/internal/processor"
 	"arbiter/internal/queue"
 	"arbiter/internal/server"
 )
 
 func main() {
-	fmt.Println("Arbiter - Universal Priority Gateway")
-
 	logger.Init("arbiter")
 
 	// Load configuration
@@ -31,7 +29,7 @@ func main() {
 	// Initialize OTEL tracing
 	ctx := context.Background()
 	if cfg.Tracing.Enabled {
-		tracerProvider, err := metrics.InitTracing(ctx, "arbiter", cfg.Tracing.Endpoint)
+		tracerProvider, err := observability.InitTracing(ctx, "arbiter", cfg.Tracing.Endpoint)
 		if err != nil {
 			logger.Default().WithField("error", err.Error()).Warn("Failed to initialize tracing, continuing without it")
 			// Continue without tracing
@@ -45,7 +43,7 @@ func main() {
 	}
 
 	// Initialize OTEL metrics
-	otelMetrics, meter, err := metrics.InitOTEL()
+	otelMetrics, meter, err := observability.InitOTEL()
 	if err != nil {
 		logger.Default().WithField("error", err.Error()).Error("Failed to initialize OTEL metrics")
 		os.Exit(1)

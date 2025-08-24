@@ -10,7 +10,7 @@ import (
 
 	"arbiter/internal/config"
 	"arbiter/internal/logger"
-	"arbiter/internal/metrics"
+	"arbiter/internal/observability"
 	"arbiter/internal/queue"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -35,8 +35,6 @@ func New(cfg *config.Config, q *queue.Queue) *Server {
 	mux.HandleFunc("/stats", s.handleStats)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 
-	// Wrap the mux with OTEL HTTP instrumentation
-	// This automatically extracts trace context from incoming requests
 	handler := otelhttp.NewHandler(mux, "arbiter",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
@@ -54,7 +52,7 @@ func New(cfg *config.Config, q *queue.Queue) *Server {
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	ctx, span := metrics.StartSpan(ctx, "arbiter.handleRequest",
+	ctx, span := observability.StartSpan(ctx, "arbiter.handleRequest",
 		attribute.String("http.method", r.Method),
 		attribute.String("http.url", r.URL.Path),
 		attribute.String("http.remote_addr", r.RemoteAddr),
@@ -103,7 +101,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.queue.Enqueue(req); err != nil {
 		span.RecordError(err)
-		if otel := metrics.GetOTEL(); otel != nil {
+		if otel := observability.GetOTEL(); otel != nil {
 			otel.RecordShed(ctx, req.UpstreamName, req.Priority.String())
 		}
 		log.WithField("upstream", req.UpstreamName).
@@ -114,7 +112,6 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Wait for the processor to signal the request is ready
 	select {
 	case response := <-req.ResponseChan:
 		if response.Error != nil {
@@ -134,12 +131,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Request has been dequeued and is ready to be proxied
 		span.AddEvent("proxying_request")
 		s.proxyRequest(ctx, w, r, response.UpstreamURL)
 
 	case <-r.Context().Done():
-		// Request cancelled by client
 		return
 
 	case <-time.After(5 * time.Minute):
@@ -176,8 +171,7 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	// Serve Prometheus metrics
-	metrics.Handler().ServeHTTP(w, r)
+	observability.Handler().ServeHTTP(w, r)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -185,7 +179,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) proxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, upstreamURL string) {
-	ctx, span := metrics.StartSpan(ctx, "arbiter.proxyRequest",
+	ctx, span := observability.StartSpan(ctx, "arbiter.proxyRequest",
 		attribute.String("upstream.url", upstreamURL),
 	)
 	defer span.End()

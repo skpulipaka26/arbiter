@@ -159,4 +159,4 @@ The system also serves well as a general-purpose API gateway where different cli
 
 ## Future Enhancements
 
-Potential areas for enhancement include dynamic priority adjustment based on request age to prevent starvation, circuit breaker patterns for upstream protection, request retry with exponential backoff, and distributed queue support for multi-instance deployments. The architecture is designed to be extensible, with clear separation between queue management, request processing, and proxying concerns.
+Potential areas for enhancement include dynamic priority adjustment based on request age to prevent starvation. The architecture is designed to be extensible, with clear separation between queue management, request processing, and proxying concerns.

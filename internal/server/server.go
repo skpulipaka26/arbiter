@@ -32,7 +32,6 @@ func New(cfg *config.Config, q *queue.Queue) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/stats", s.handleStats)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 
 	handler := otelhttp.NewHandler(mux, "arbiter",
@@ -68,33 +67,15 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	req := queue.NewRequestWithContext(ctx, r)
 	defer req.Cancel()
 
-	var upstreamConfig *config.Upstream
-	for i := range s.config.Upstreams {
-		if s.config.Upstreams[i].Name == req.UpstreamName {
-			upstreamConfig = &s.config.Upstreams[i]
-			break
-		}
-	}
-
-	if upstreamConfig == nil {
-		span.SetAttributes(attribute.String("error", "unknown_upstream"))
-		log.WithField("upstream", req.UpstreamName).
-			Warn("Unknown upstream requested")
-		http.Error(w, fmt.Sprintf("Unknown upstream: %s", req.UpstreamName), http.StatusBadRequest)
-		return
-	}
-
-	if s.queue.Length(req.UpstreamName) >= upstreamConfig.Queue.MaxSize {
+	if s.queue.Length() >= s.config.Upstream.Queue.MaxSize {
 		span.SetAttributes(attribute.String("error", "queue_full"))
-		log.WithField("upstream", req.UpstreamName).
-			WithField("queue_size", s.queue.Length(req.UpstreamName)).
+		log.WithField("queue_size", s.queue.Length()).
 			Warn("Queue full, rejecting request")
 		http.Error(w, "Queue full", http.StatusTooManyRequests)
 		return
 	}
 
 	span.SetAttributes(
-		attribute.String("upstream", req.UpstreamName),
 		attribute.String("priority", req.Priority.String()),
 		attribute.String("request_id", req.ID),
 	)
@@ -102,10 +83,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if err := s.queue.Enqueue(req); err != nil {
 		span.RecordError(err)
 		if otel := observability.GetOTEL(); otel != nil {
-			otel.RecordShed(ctx, req.UpstreamName, req.Priority.String())
+			otel.RecordShed(ctx, "upstream", req.Priority.String())
 		}
-		log.WithField("upstream", req.UpstreamName).
-			WithField("priority", req.Priority.String()).
+		log.WithField("priority", req.Priority.String()).
 			WithField("error", err.Error()).
 			Error("Request shed due to overload")
 		http.Error(w, "Service overloaded", http.StatusServiceUnavailable)
@@ -132,7 +112,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 
 		span.AddEvent("proxying_request")
-		s.proxyRequest(ctx, w, r, response.UpstreamURL)
+		s.proxyRequest(ctx, w, r, s.config.Upstream.URL)
 
 	case <-r.Context().Done():
 		return
@@ -146,24 +126,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"healthy","upstreams":%d}`, len(s.config.Upstreams))
-}
-
-func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	fmt.Fprintf(w, `{"queues":{`)
-	first := true
-	for _, upstream := range s.config.Upstreams {
-		if !first {
-			fmt.Fprintf(w, ",")
-		}
-		first = false
-		length := s.queue.Length(upstream.Name)
-		fmt.Fprintf(w, `"%s":%d`, upstream.Name, length)
-	}
-	fmt.Fprintf(w, `}}`)
+	fmt.Fprintf(w, `{"status":"healthy","upstream":"%s"}`, s.config.Upstream.URL)
 }
 
 func (s *Server) ListenAndServe() error {

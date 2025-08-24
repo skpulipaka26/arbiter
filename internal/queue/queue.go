@@ -38,7 +38,6 @@ func (p Priority) String() string {
 type Request struct {
 	ID           string
 	HTTPRequest  *http.Request
-	UpstreamName string
 	Priority     Priority
 	EnqueuedAt   time.Time
 	ResponseChan chan *Response
@@ -62,7 +61,6 @@ func NewRequestWithContext(ctx context.Context, req *http.Request) *Request {
 	return &Request{
 		ID:           generateRequestID(),
 		HTTPRequest:  req.WithContext(ctx),
-		UpstreamName: extractUpstream(req),
 		Priority:     extractPriority(req),
 		EnqueuedAt:   time.Now(),
 		ResponseChan: make(chan *Response, 1),
@@ -123,81 +121,69 @@ func (pq *PriorityQueue) Peek() *Request {
 }
 
 type Queue struct {
-	queues   map[string]*PriorityQueue
-	configs  map[string]*config.QueueConfig // Per-upstream configs
-	mutex    sync.RWMutex
-	stopChan chan struct{}
+	queue  *PriorityQueue
+	config *config.QueueConfig
+	mutex  sync.RWMutex
 }
 
-func New(upstreams []config.Upstream) *Queue {
+func New(upstream config.Upstream) *Queue {
+	pq := &PriorityQueue{}
+	heap.Init(pq)
+
 	q := &Queue{
-		queues:   make(map[string]*PriorityQueue),
-		configs:  make(map[string]*config.QueueConfig),
-		stopChan: make(chan struct{}),
+		queue:  pq,
+		config: &upstream.Queue,
 	}
-
-	for i := range upstreams {
-		q.configs[upstreams[i].Name] = &upstreams[i].Queue
-	}
-
-	q.startMaintenanceWorker()
 
 	return q
-}
-
-func (q *Queue) Shutdown() {
-	close(q.stopChan)
 }
 
 func (q *Queue) Enqueue(req *Request) error {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 
-	pq, exists := q.queues[req.UpstreamName]
-	if !exists {
-		pq = &PriorityQueue{}
-		heap.Init(pq)
-		q.queues[req.UpstreamName] = pq
-	}
-
-	cfg, exists := q.configs[req.UpstreamName]
-	if !exists {
-		return fmt.Errorf("no config for upstream: %s", req.UpstreamName)
-	}
-
-	queueSize := pq.Len()
-	if queueSize > cfg.LowPriorityShedAt && req.Priority == Low {
+	queueSize := q.queue.Len()
+	if queueSize > q.config.LowPriorityShedAt && req.Priority == Low {
 		return fmt.Errorf("request shed due to overload")
 	}
-	if queueSize > cfg.MediumPriorityShedAt && (req.Priority == Low || req.Priority == Medium) {
+	if queueSize > q.config.MediumPriorityShedAt && (req.Priority == Low || req.Priority == Medium) {
 		return fmt.Errorf("request shed due to extreme overload")
 	}
 
-	heap.Push(pq, req)
+	heap.Push(q.queue, req)
 	return nil
 }
 
-func (q *Queue) Dequeue(upstreamName string) *Request {
+func (q *Queue) Dequeue() *Request {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 
-	pq, exists := q.queues[upstreamName]
-	if !exists || pq.Len() == 0 {
-		return nil
+	// Keep checking until we find a valid request or queue is empty
+	for q.queue.Len() > 0 {
+		// Peek at the top request
+		req := (*q.queue)[0]
+
+		// Check if it should be shed
+		if q.shouldShedRequest(req) {
+			// Remove the stale/cancelled request
+			heap.Pop(q.queue)
+			// Notify asynchronously to avoid blocking
+			go q.notifyShed(req)
+			continue
+		}
+
+		// Valid request found, return it
+		return heap.Pop(q.queue).(*Request)
 	}
 
-	req := heap.Pop(pq).(*Request)
-	return req
+	return nil
 }
 
-func (q *Queue) Length(upstreamName string) int {
+func (q *Queue) Length() int {
 	q.mutex.RLock()
 	defer q.mutex.RUnlock()
 
-	if pq, exists := q.queues[upstreamName]; exists {
-		return pq.Len()
-	}
-	return 0
+	return q.queue.Len()
 }
 
 func extractPriority(req *http.Request) Priority {
@@ -215,46 +201,16 @@ func extractPriority(req *http.Request) Priority {
 	}
 }
 
-func extractUpstream(req *http.Request) string {
-	upstream := strings.TrimSpace(req.Header.Get("Upstream"))
-	if upstream == "" {
-		return "default"
-	}
-
-	if len(upstream) > 100 {
-		return "default"
-	}
-
-	for _, r := range upstream {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '-' || r == '_') {
-			return "default"
-		}
-	}
-
-	return upstream
-}
-
 func generateRequestID() string {
 	return uuid.New().String()
 }
 
-func (q *Queue) GetMetricsByPriority(upstreamName string) map[string]interface{} {
+func (q *Queue) GetMetricsByPriority() map[string]interface{} {
 	q.mutex.RLock()
 	defer q.mutex.RUnlock()
 
-	pq, exists := q.queues[upstreamName]
-	if !exists {
-		return map[string]interface{}{
-			"size":   0,
-			"high":   0,
-			"medium": 0,
-			"low":    0,
-		}
-	}
-
 	high, medium, low := 0, 0, 0
-	for _, req := range *pq {
+	for _, req := range *q.queue {
 		switch req.Priority {
 		case High:
 			high++
@@ -266,7 +222,7 @@ func (q *Queue) GetMetricsByPriority(upstreamName string) map[string]interface{}
 	}
 
 	return map[string]interface{}{
-		"size":   pq.Len(),
+		"size":   q.queue.Len(),
 		"high":   high,
 		"medium": medium,
 		"low":    low,

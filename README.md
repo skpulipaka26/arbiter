@@ -1,12 +1,20 @@
 # Arbiter
 
-Arbiter is a high-performance priority-based request gateway that sits between clients and upstream services, managing request flow based on configurable priorities and processing modes. It acts as an intelligent proxy that ensures critical requests are processed first while maintaining system stability under load.
+Arbiter is a high-performance priority-based request gateway designed for sidecar deployment with resource-intensive services like vLLM. It manages request flow based on configurable priorities and processing modes, ensuring critical requests are processed first while maintaining system stability under load.
 
 ## Overview
 
-Modern distributed systems often struggle with request prioritization, especially when dealing with resource-intensive services like LLMs or ML inference endpoints. Arbiter solves this by implementing a priority queue system that aggregates incoming requests and forwards them to upstream services based on their priority levels. The system uses a fire-and-forget architecture, allowing it to handle massive throughputs while being completely agnostic to response content types, including streaming responses like Server-Sent Events (SSE).
+Modern ML/LLM services often struggle with request prioritization and load management. Arbiter solves this by implementing a priority queue system that sits between clients and a single upstream service. The system uses a fire-and-forget architecture, handling high throughputs while being completely agnostic to response content types, including streaming responses like Server-Sent Events (SSE).
 
 ## Architecture
+
+### Sidecar Deployment Model
+
+Arbiter is designed to run as a companion alongside your service (e.g., vLLM), managing all incoming traffic:
+
+```
+Client → Arbiter (port 8080) → vLLM/Service (localhost:8000)
+```
 
 ### Request Flow
 
@@ -21,8 +29,8 @@ sequenceDiagram
     participant Proxy
     participant Upstream
 
-    Client->>Server: HTTP Request + Headers
-    Note over Server: Extract priority & upstream
+    Client->>Server: HTTP Request + Priority Header
+    Note over Server: Extract priority from header
     Server->>Queue: Enqueue request
 
     loop Processing Loop
@@ -32,88 +40,165 @@ sequenceDiagram
 
     Processor->>Server: Signal ready
     Server->>Proxy: Forward request
-    Proxy->>Upstream: Direct proxy
+    Proxy->>Upstream: Direct proxy (preserves path)
     Upstream-->>Client: Stream response
     Note over Client,Upstream: Response streams directly
 ```
 
-The server component receives incoming HTTP requests and extracts metadata from headers to determine the target upstream service and request priority. Each request is assigned one of three priority levels (High, Medium, or Low) based on the Priority header. The request is then enqueued into a priority queue specific to its target upstream.
+The server component receives incoming HTTP requests and extracts the priority from the `Priority` header. Each request is assigned one of three priority levels (High, Medium, or Low). The request path is preserved when forwarding to the upstream service.
 
-The processor component continuously monitors these queues, respecting configured concurrency limits for each upstream. When capacity becomes available, it dequeues the highest priority request and signals the server that the request is ready for forwarding. This fire-and-forget approach means the processor doesn't wait for responses, maximizing throughput.
+The processor component continuously monitors the queue, respecting configured concurrency limits or batch settings. When capacity becomes available, it dequeues the highest priority request and signals the server that the request is ready for forwarding.
 
-Once signaled, the server uses an embedded reverse proxy to forward the request directly to the upstream service. The reverse proxy handles all response types transparently, whether they're simple JSON responses, large file downloads, or streaming SSE responses from LLM servers. The response flows directly from the upstream back to the client without buffering in Arbiter.
+Once signaled, the server uses an embedded reverse proxy to forward the request directly to the upstream service. The response flows directly from the upstream back to the client without buffering in Arbiter.
 
 ### Priority Queue Implementation
 
-The priority queue is implemented as a binary min-heap, providing efficient O(log n) operations for both enqueue and dequeue operations. Within each priority level, requests maintain FIFO ordering based on their enqueue timestamp, ensuring fairness among requests of the same priority.
+The priority queue is implemented as a binary min-heap, providing efficient O(log n) operations for both enqueue and dequeue operations. Within each priority level, requests maintain FIFO ordering based on their enqueue timestamp.
 
 ### Processing Modes
 
-Arbiter supports two processing modes that can be configured per upstream service:
+Arbiter supports two processing modes:
 
-**Individual Mode** processes requests one at a time as they're dequeued from the priority queue. This mode is ideal for services that handle single requests efficiently, such as REST APIs or LLM servers. The max_concurrent configuration controls how many requests can be in-flight simultaneously to each upstream.
+**Individual Mode** processes requests one at a time as they're dequeued from the priority queue. The `max_concurrent` configuration controls how many requests can be in-flight simultaneously to the upstream. Ideal for services like REST APIs or vLLM servers that handle requests individually.
 
-**Batch Mode** collects multiple requests over a time window before processing them as a group. The processor waits up to batch_timeout milliseconds to collect up to batch_size requests. If the timeout expires before reaching the full batch size, it processes whatever has been collected. This mode is optimal for services that benefit from batched operations, such as ML inference endpoints that can process multiple inputs in a single forward pass.
+**Batch Mode** collects multiple requests over a time window before processing them as a group. The processor waits up to `batch_timeout` to collect up to `batch_size` requests. This mode is optimal for services that benefit from batched operations, such as ML inference endpoints that can process multiple inputs in a single forward pass.
 
 ## Configuration
 
-Arbiter is configured through a YAML file that defines upstream services and their processing characteristics:
+Arbiter is configured through a YAML file:
 
+### Individual Mode
 ```yaml
 port: 8080
 
-upstreams:
-  - name: "llm-server"
-    url: "http://localhost:1234"
-    mode: "individual"
-    max_concurrent: 1
-    timeout: 300s
+tracing:
+  enabled: false
+  endpoint: ""
 
-  - name: "ml-inference"
-    url: "http://localhost:8000"
-    mode: "batch"
-    batch_size: 5
-    batch_timeout: 100ms
-    max_concurrent: 2
-    timeout: 30s
-
-queues:
-  max_size: 1000
+upstream:
+  url: "http://localhost:8000"  # vLLM default port
+  mode: "individual"
+  max_concurrent: 10  # Adjust based on vLLM capabilities
+  timeout: 300s  # Long timeout for LLM inference
+  queue:
+    max_size: 100
+    low_priority_shed_at: 30
+    medium_priority_shed_at: 60
+    request_max_age: 60s
 ```
 
-Each upstream configuration specifies the service URL, processing mode, concurrency limits, and timeout values. The global queue configuration sets the maximum queue size across all upstreams to prevent unbounded memory growth under extreme load.
+### For Batch Processing
+```yaml
+port: 8080
+
+upstream:
+  url: "http://localhost:8000"
+  mode: "batch"
+  batch_size: 5
+  batch_timeout: 100ms
+  queue:
+    max_size: 1000
+    low_priority_shed_at: 500
+    medium_priority_shed_at: 800
+    request_max_age: 30s
+```
+
+### Configuration Validation
+
+Arbiter validates configurations at startup and will fail with clear error messages for invalid settings:
+- Invalid mode (must be "individual" or "batch")
+- Missing required batch settings in batch mode
+- Queue thresholds exceeding max_size
+- Invalid priority shedding thresholds order
 
 ## Load Shedding
 
-When the system is under heavy load, Arbiter implements intelligent load shedding to maintain stability. The shedding strategy is based on both queue depth and request priority:
+When the system is under heavy load, Arbiter implements intelligent load shedding based on queue depth and request priority:
 
 ```mermaid
 graph LR
     subgraph "Load Shedding Thresholds"
-        A[Queue Size < 500] -->|Accept All| Accept1[All Priorities Accepted]
-        B[Queue Size 500-800] -->|Shed Low| Shed1[Low Priority Rejected]
-        C[Queue Size > 800] -->|Shed Low+Medium| Shed2[Only High Priority Accepted]
-        D[Queue Size = 1000] -->|Queue Full| Shed3[All Rejected]
+        A[Queue < low_threshold] -->|Accept All| Accept1[All Priorities]
+        B[Queue > low_threshold] -->|Shed Low| Shed1[Medium & High Only]
+        C[Queue > medium_threshold] -->|Shed Low+Medium| Shed2[High Priority Only]
+        D[Queue = max_size] -->|Queue Full| Shed3[All Rejected]
     end
 ```
 
-This graduated approach ensures that critical high-priority requests can still be processed even when the system is under stress, while preventing complete system overload.
+Additionally, requests that exceed `request_max_age` in the queue are automatically shed to prevent stale requests from consuming resources.
+
+## Kubernetes Deployment
+
+### As a Sidecar
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-with-arbiter
+spec:
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:latest
+      ports:
+        - containerPort: 8000  # Not exposed to service
+    - name: arbiter
+      image: your-registry/arbiter:latest
+      ports:
+        - containerPort: 8080  # Service targets this port
+      volumeMounts:
+        - name: config
+          mountPath: /config
+      command: ["./arbiter", "-config", "/config/config.yaml"]
+  volumes:
+    - name: config
+      configMap:
+        name: arbiter-config
+```
+
+### Service Configuration
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-service
+spec:
+  selector:
+    app: vllm
+  ports:
+    - port: 80
+      targetPort: 8080  # Points to Arbiter, not vLLM
+```
+
+### Traffic Splitting for Gradual Rollout
+
+Using Gateway API:
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+spec:
+  rules:
+    - backendRefs:
+        - name: vllm-direct
+          port: 8000
+          weight: 50
+        - name: vllm-with-arbiter
+          port: 8080
+          weight: 50
+```
 
 ## Metrics and Monitoring
 
-Arbiter exposes comprehensive metrics through OpenTelemetry with a Prometheus-compatible endpoint at `/metrics`. These metrics provide visibility into system performance and help identify bottlenecks:
+Arbiter exposes comprehensive metrics through OpenTelemetry with a Prometheus-compatible endpoint at `/metrics`:
 
-The request metrics track total request count, duration, and queue time, all labeled by upstream service and priority level. Queue metrics show current queue depth and shed counts, helping operators understand system load and capacity. Batch processing metrics indicate batch sizes and processing efficiency for batch-mode upstreams.
+- Request metrics (count, duration, queue time) by priority level
+- Queue depth and shed counts
+- Batch processing metrics (for batch mode)
 
-Additional endpoints provide real-time system status. The `/health` endpoint returns basic health information, while `/stats` provides current queue depths for all upstreams in JSON format.
-
-## Performance Characteristics
-
-Arbiter is designed for high throughput and low latency operation. The fire-and-forget architecture ensures that request processing isn't blocked by slow upstream responses. The system can handle thousands of requests per second while maintaining priority ordering.
-
-The priority queue implementation provides O(log n) complexity for both enqueue and dequeue operations, ensuring consistent performance even with large queue depths. Memory usage scales linearly with queue depth, with each queued request consuming minimal memory since only metadata is stored, not request bodies.
-
-The reverse proxy streams responses directly from upstreams to clients without buffering, minimizing memory usage and latency for large responses or streaming connections. This makes Arbiter particularly well-suited for LLM applications where responses can be large and benefit from streaming.
+Additional endpoints:
+- `/health` - Health check endpoint
+- `/metrics` - Prometheus metrics
 
 ## Building and Running
 
@@ -129,34 +214,81 @@ Run with a configuration file:
 ./arbiter -config config.yaml
 ```
 
-The server starts on the configured port and begins accepting requests immediately. Requests should include headers specifying the target upstream and priority:
+## Making Requests
+
+Send requests to Arbiter with priority headers:
 
 ```bash
-curl -X POST http://localhost:8080/api/endpoint \
-  -H "Upstream: llm-server" \
+# High priority request
+curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Priority: high" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Hello, world!"}'
+  -d '{"model": "llama-2", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Low priority request
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Priority: low" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llama-2", "messages": [{"role": "user", "content": "Tell me a story"}]}'
 ```
+
+Priority values:
+- `high`, `urgent`, `critical` → High priority
+- `medium`, `normal`, `standard` → Medium priority
+- `low`, `background`, `batch` → Low priority
+- No header or unrecognized value → Low priority (default)
 
 ## Testing
 
-The project includes test utilities for validating priority queue behavior. The `cmd/llmtest` tool demonstrates priority ordering with an LLM server, sending multiple requests with different priorities simultaneously and showing how high-priority requests are processed first.
+The project includes test utilities:
 
-Run the LLM test:
-
+### LLM Priority Test
 ```bash
 go run cmd/llmtest/main.go
 ```
+Sends multiple requests with different priorities to demonstrate priority ordering.
 
-This test sends six requests (two each of high, medium, and low priority) to an LLM server through Arbiter, demonstrating that responses arrive in priority order regardless of submission order.
+### Load Test
+```bash
+go run cmd/loadtest/main.go
+```
+Performs load testing with configurable request patterns.
+
+## Performance Characteristics
+
+- **Fire-and-forget architecture**: Request processing isn't blocked by slow upstream responses
+- **O(log n) queue operations**: Efficient even with large queue depths
+- **Zero-copy streaming**: Responses stream directly from upstream to client
+- **Minimal memory footprint**: Only request metadata is queued, not bodies
 
 ## Use Cases
 
-Arbiter is particularly valuable in scenarios where request prioritization and load management are critical. In LLM applications, it ensures that production requests take precedence over batch processing or testing traffic. For ML inference services, it can batch requests for efficient GPU utilization while maintaining SLA requirements for high-priority requests.
+Arbiter is ideal for:
 
-The system also serves well as a general-purpose API gateway where different clients or request types need different quality-of-service guarantees. By separating request prioritization from business logic, Arbiter allows upstream services to focus on processing while the gateway handles traffic management.
+1. **vLLM/LLM Deployments**: Manage request priorities for production vs development traffic
+2. **ML Inference Services**: Batch requests for efficient GPU utilization
+3. **Rate-Limited APIs**: Control request flow to respect upstream limits
+4. **Mixed Workload Systems**: Ensure critical requests aren't blocked by bulk operations
 
-## Future Enhancements
+## Environment Variables
 
-Potential areas for enhancement include dynamic priority adjustment based on request age to prevent starvation. The architecture is designed to be extensible, with clear separation between queue management, request processing, and proxying concerns.
+For containerized deployments, you can override configuration with environment variables:
+
+```bash
+ARBITER_PORT=8080
+ARBITER_UPSTREAM_URL=http://localhost:8000
+ARBITER_UPSTREAM_MODE=individual
+ARBITER_UPSTREAM_MAX_CONCURRENT=10
+```
+
+## Graceful Shutdown
+
+Arbiter handles shutdown signals gracefully:
+1. Stops accepting new requests
+2. Waits for in-flight requests to complete
+3. Drains the queue processor
+4. Cleanly shuts down with timeout for trace flushing
+
+## License
+
+MIT

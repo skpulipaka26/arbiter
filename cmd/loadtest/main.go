@@ -16,7 +16,6 @@ import (
 type TestResult struct {
 	ID           int           `json:"id"`
 	Priority     string        `json:"priority"`
-	Upstream     string        `json:"upstream"`
 	StatusCode   int           `json:"status_code"`
 	ResponseTime time.Duration `json:"response_time"`
 	Success      bool          `json:"success"`
@@ -37,7 +36,6 @@ type TestStats struct {
 	TestDuration      time.Duration            `json:"test_duration"`
 	RequestsPerSec    float64                  `json:"requests_per_second"`
 	PriorityStats     map[string]PriorityStats `json:"priority_stats"`
-	UpstreamStats     map[string]UpstreamStats `json:"upstream_stats"`
 	ErrorDistribution map[string]int           `json:"error_distribution"`
 }
 
@@ -52,12 +50,6 @@ type PriorityStats struct {
 	P99ResponseTime time.Duration `json:"p99_response_time"`
 }
 
-type UpstreamStats struct {
-	Count           int           `json:"count"`
-	SuccessCount    int           `json:"success_count"`
-	SuccessRate     float64       `json:"success_rate"`
-	AvgResponseTime time.Duration `json:"avg_response_time"`
-}
 
 func generatePriority() string {
 	r := rand.Float64()
@@ -71,27 +63,17 @@ func generatePriority() string {
 	}
 }
 
-func generateUpstream() string {
-	r := rand.Float64()
-	if r < 0.7 { // 70% individual mode
-		return "api-service"
-	} else { // 30% batch mode
-		return "batch-service"
-	}
-}
 
 func sendRequest(id int, config *LoadTestConfig) TestResult {
 	startTime := time.Now()
 
 	priority := generatePriority()
-	upstream := generateUpstream()
 
 	payload := map[string]interface{}{
 		"test_id":   id,
 		"message":   fmt.Sprintf("Load test request %d", id),
 		"timestamp": startTime.Unix(),
 		"priority":  priority,
-		"upstream":  upstream,
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
@@ -105,7 +87,6 @@ func sendRequest(id int, config *LoadTestConfig) TestResult {
 		return TestResult{
 			ID:           id,
 			Priority:     priority,
-			Upstream:     upstream,
 			ResponseTime: time.Since(startTime),
 			Success:      false,
 			StartTime:    startTime,
@@ -114,7 +95,6 @@ func sendRequest(id int, config *LoadTestConfig) TestResult {
 	}
 
 	req.Header.Set("Priority", priority)
-	req.Header.Set("Upstream", upstream)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Arbiter-LoadTest/1.0")
 
@@ -125,7 +105,6 @@ func sendRequest(id int, config *LoadTestConfig) TestResult {
 	result := TestResult{
 		ID:           id,
 		Priority:     priority,
-		Upstream:     upstream,
 		ResponseTime: responseTime,
 		StartTime:    startTime,
 		Success:      false,
@@ -203,12 +182,10 @@ func analyzeResults(results []TestResult) TestStats {
 		TestDuration:      testDuration,
 		RequestsPerSec:    float64(len(results)) / testDuration.Seconds(),
 		PriorityStats:     make(map[string]PriorityStats),
-		UpstreamStats:     make(map[string]UpstreamStats),
 		ErrorDistribution: make(map[string]int),
 	}
 
 	priorityResults := make(map[string][]TestResult)
-	upstreamResults := make(map[string][]TestResult)
 
 	for _, result := range results {
 		if result.Success {
@@ -219,21 +196,10 @@ func analyzeResults(results []TestResult) TestStats {
 		}
 
 		priorityResults[result.Priority] = append(priorityResults[result.Priority], result)
-		upstreamResults[result.Upstream] = append(upstreamResults[result.Upstream], result)
 	}
 
 	for priority, reqs := range priorityResults {
 		stats.PriorityStats[priority] = calculateStats(reqs)
-	}
-
-	for upstream, reqs := range upstreamResults {
-		pStats := calculateStats(reqs)
-		stats.UpstreamStats[upstream] = UpstreamStats{
-			Count:           pStats.Count,
-			SuccessCount:    pStats.SuccessCount,
-			SuccessRate:     pStats.SuccessRate,
-			AvgResponseTime: pStats.AvgResponseTime,
-		}
 	}
 
 	return stats
@@ -313,16 +279,6 @@ func printResults(stats TestStats) {
 			fmt.Printf("    99th Percentile:   %v\n", pstats.P99ResponseTime)
 			fmt.Printf("\n")
 		}
-	}
-
-	fmt.Printf("UPSTREAM BREAKDOWN:\n")
-	fmt.Printf(strings.Repeat("-", 80) + "\n")
-	for upstream, ustats := range stats.UpstreamStats {
-		fmt.Printf("  %s:\n", upstream)
-		fmt.Printf("    Requests:          %d\n", ustats.Count)
-		fmt.Printf("    Success Rate:      %.1f%%\n", ustats.SuccessRate)
-		fmt.Printf("    Avg Response Time: %v\n", ustats.AvgResponseTime)
-		fmt.Printf("\n")
 	}
 
 	if len(stats.ErrorDistribution) > 0 {

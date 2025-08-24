@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"arbiter/internal/config"
 	"arbiter/internal/logger"
@@ -35,7 +36,9 @@ func main() {
 			// Continue without tracing
 		} else {
 			defer func() {
-				if err := tracerProvider.Shutdown(ctx); err != nil {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
 					logger.Default().WithField("error", err.Error()).Error("Error shutting down tracer provider")
 				}
 			}()
@@ -50,7 +53,7 @@ func main() {
 	}
 
 	// Create components
-	q := queue.New(cfg.Upstreams)
+	q := queue.New(cfg.Upstream)
 	proc := processor.New(cfg, q)
 	srv := server.New(cfg, q)
 
@@ -58,23 +61,19 @@ func main() {
 	err = otelMetrics.RegisterCallbacks(meter,
 		func() map[string]map[string]int64 {
 			result := make(map[string]map[string]int64)
-			for _, upstream := range cfg.Upstreams {
-				qMetrics := q.GetMetricsByPriority(upstream.Name)
-				result[upstream.Name] = map[string]int64{
-					"high":   int64(qMetrics["high"].(int)),
-					"medium": int64(qMetrics["medium"].(int)),
-					"low":    int64(qMetrics["low"].(int)),
-					"total":  int64(qMetrics["size"].(int)),
-				}
+			qMetrics := q.GetMetricsByPriority()
+			result["upstream"] = map[string]int64{
+				"high":   int64(qMetrics["high"].(int)),
+				"medium": int64(qMetrics["medium"].(int)),
+				"low":    int64(qMetrics["low"].(int)),
+				"total":  int64(qMetrics["size"].(int)),
 			}
 			return result
 		},
 		func() map[string]int64 {
 			// For now, return empty - we'll track active requests differently
 			result := make(map[string]int64)
-			for _, upstream := range cfg.Upstreams {
-				result[upstream.Name] = 0
-			}
+			result["upstream"] = 0
 			return result
 		})
 	if err != nil {
@@ -113,7 +112,5 @@ func main() {
 	proc.Stop()
 	logger.Default().Info("Processor stopped - all queued requests processed")
 
-	// Stop queue maintenance
-	q.Shutdown()
 	logger.Default().Info("Queue maintenance stopped")
 }

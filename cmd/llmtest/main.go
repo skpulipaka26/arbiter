@@ -76,7 +76,6 @@ func sendLLMRequest(config RequestConfig) {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Upstream", "llm-server")
 	req.Header.Set("Priority", config.Priority)
 	req.Header.Set("Accept", "text/event-stream")
 

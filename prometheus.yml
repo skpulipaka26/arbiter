@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Scrape Arbiter metrics
+  - job_name: 'arbiter'
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+    metrics_path: '/metrics'
+
+  # Scrape Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape Grafana metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+
+  # Scrape Tempo metrics
+  - job_name: 'tempo'
+    static_configs:
+      - targets: ['tempo:3200']
+
+  # Scrape Loki metrics
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']

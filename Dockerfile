@@ -5,7 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -ldflags="-w -s" -o arbiter .
+RUN go build -ldflags="-w -s" -o arbiter ./cmd/arbiter
 
 FROM alpine:latest
 

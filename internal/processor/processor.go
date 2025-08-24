@@ -1,18 +1,16 @@
 package processor
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"sync"
 	"time"
 
 	"arbiter/internal/config"
+	"arbiter/internal/logger"
 	"arbiter/internal/metrics"
 	"arbiter/internal/queue"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Processor struct {
@@ -123,64 +121,77 @@ func (w *Worker) runIndividualProcessor() {
 			return
 
 		case <-ticker.C:
-			// Try to get a request
-			req := w.queue.Dequeue(w.upstream.Name)
-			if req == nil {
-				continue
-			}
-			// Got request from queue
-
-			// Process request in goroutine with concurrency limit
+			// Only dequeue if we have capacity
 			select {
 			case semaphore <- struct{}{}:
+				// We have capacity, try to get a request
+				req := w.queue.Dequeue(w.upstream.Name)
+				if req == nil {
+					// No request available, release semaphore
+					<-semaphore
+					continue
+				}
+				
+				logger.FromContext(req.Context()).
+					WithField("request_id", req.ID).
+					WithField("priority", req.Priority.String()).
+					WithField("upstream", w.upstream.Name).
+					Info("Request dequeued")
+				
+				// Process request in goroutine
 				go func(request *queue.Request) {
 					defer func() { <-semaphore }()
 					w.processIndividualRequest(request)
 				}(req)
 			default:
-				// Max concurrent reached, put request back
-				w.queue.Enqueue(req)
+				// Max concurrent reached, don't dequeue
+				continue
 			}
 		}
 	}
 }
 
 func (w *Worker) processIndividualRequest(req *queue.Request) {
+	ctx, span := metrics.StartSpan(req.Context(), "arbiter.processRequest",
+		attribute.String("request_id", req.ID),
+		attribute.String("upstream", w.upstream.Name),
+		attribute.String("priority", req.Priority.String()),
+	)
+	defer span.End()
+	
 	start := time.Now()
 	queueTime := time.Since(req.EnqueuedAt)
 
 	// Processing individual request
+	log := logger.FromContext(ctx)
+	log.WithField("request_id", req.ID).
+		WithField("priority", req.Priority.String()).
+		WithField("upstream", w.upstream.Name).
+		WithField("queue_time_ms", queueTime.Milliseconds()).
+		Info("Forwarding request to upstream")
 
 	// Track OTEL metrics
 	if otel := metrics.GetOTEL(); otel != nil {
-		otel.RecordQueueTime(req.Context(), w.upstream.Name, req.Priority.String(), queueTime)
+		otel.RecordQueueTime(ctx, w.upstream.Name, req.Priority.String(), queueTime)
+	}
+	
+	span.SetAttributes(
+		attribute.Int64("queue_time_ms", queueTime.Milliseconds()),
+	)
+
+	// Signal that this request is ready to be forwarded
+	// The server handler will do the actual proxying
+	req.ResponseChan <- &queue.Response{
+		Ready: true,
+		UpstreamURL: w.upstream.URL,
 	}
 
-	// Forward to upstream
-	resp, err := w.forwardRequest(req)
-	status := "success"
-	if err != nil {
-		status = "failed"
-		// Request failed
-		req.ResponseChan <- &queue.Response{Error: err}
-	}
-
-	// Record OTEL request metrics
+	// Record metrics (fire and forget)
 	if otel := metrics.GetOTEL(); otel != nil {
-		otel.RecordRequest(req.Context(), w.upstream.Name, req.Priority.String(), time.Since(start), status)
+		otel.RecordRequest(ctx, w.upstream.Name, req.Priority.String(), time.Since(start), "forwarded")
 	}
-
-	if err != nil {
-		return
-	}
-
-	// Send response back
-	select {
-	case req.ResponseChan <- resp:
-		// Request completed
-	case <-req.Context().Done():
-		// Request cancelled
-	}
+	
+	span.AddEvent("request_forwarded")
 }
 
 // Batch mode: collect requests and process in batches
@@ -247,36 +258,20 @@ func (w *Worker) processBatch(batch []*queue.Request) {
 		otel.RecordBatch(batch[0].Context(), w.upstream.Name, int64(batchSize))
 	}
 
-	// For now, process batch requests individually
-	// In a real implementation, you'd combine them into a single upstream call
+	// Fire and forget - signal all requests in batch are ready
 	for _, req := range batch {
 		go func(request *queue.Request) {
 			reqStart := time.Now()
-			resp, err := w.forwardRequest(request)
-
-			// Record OTEL metrics for each request
-			status := "success"
-			if err != nil {
-				status = "failed"
-				// Batch request failed
-				request.ResponseChan <- &queue.Response{Error: err}
+			
+			// Signal that this request is ready to be forwarded
+			request.ResponseChan <- &queue.Response{
+				Ready:       true,
+				UpstreamURL: w.upstream.URL,
 			}
-
+			
+			// Record metrics
 			if otel := metrics.GetOTEL(); otel != nil {
-				otel.RecordRequest(request.Context(), w.upstream.Name, request.Priority.String(), time.Since(reqStart), status)
-			}
-
-			if err != nil {
-				return
-			}
-
-			// Modify response to indicate it was batch processed
-			resp.Headers.Set("X-Batch-Size", fmt.Sprintf("%d", batchSize))
-
-			select {
-			case request.ResponseChan <- resp:
-			case <-request.Context().Done():
-				// Batch request cancelled
+				otel.RecordRequest(request.Context(), w.upstream.Name, request.Priority.String(), time.Since(reqStart), "forwarded")
 			}
 		}(req)
 	}
@@ -284,55 +279,3 @@ func (w *Worker) processBatch(batch []*queue.Request) {
 	// Batch dispatched
 }
 
-func (w *Worker) forwardRequest(req *queue.Request) (*queue.Response, error) {
-	// Parse upstream URL
-	upstreamURL, err := url.Parse(w.upstream.URL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid upstream URL: %w", err)
-	}
-
-	// Create a reverse proxy for this upstream
-	proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
-	proxy.Transport = w.client.Transport
-
-	// Capture the response using a custom ResponseWriter
-	responseCapture := &responseCapture{
-		headers: make(http.Header),
-		body:    &bytes.Buffer{},
-	}
-
-	// Add our tracking headers
-	req.HTTPRequest.Header.Set("X-Request-ID", req.ID)
-	req.HTTPRequest.Header.Set("X-Priority", req.Priority.String())
-
-	// Let ReverseProxy handle everything - body, headers, methods, etc.
-	proxy.ServeHTTP(responseCapture, req.HTTPRequest)
-
-	return &queue.Response{
-		StatusCode: responseCapture.statusCode,
-		Headers:    responseCapture.headers,
-		Body:       responseCapture.body.Bytes(),
-	}, nil
-}
-
-// responseCapture implements http.ResponseWriter to capture the response
-type responseCapture struct {
-	statusCode int
-	headers    http.Header
-	body       *bytes.Buffer
-}
-
-func (r *responseCapture) Header() http.Header {
-	return r.headers
-}
-
-func (r *responseCapture) Write(b []byte) (int, error) {
-	if r.statusCode == 0 {
-		r.statusCode = http.StatusOK
-	}
-	return r.body.Write(b)
-}
-
-func (r *responseCapture) WriteHeader(statusCode int) {
-	r.statusCode = statusCode
-}

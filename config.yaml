@@ -1,19 +1,42 @@
 port: 8080
 
+tracing:
+  enabled: true
+  endpoint: "tempo:4318"
+
 upstreams:
-  - name: "simple-api"
-    url: "http://localhost:8000"
+  - name: "api-service"
+    url: "http://httpbin:80"
     mode: "individual"
-    max_concurrent: 2  # Low concurrency to see queueing
+    max_concurrent: 10
     timeout: 60s
+    queue:
+      max_size: 1000
+      low_priority_shed_at: 500
+      medium_priority_shed_at: 800
+      request_max_age: 30s
+
+  - name: "llm-server"
+    url: "http://host.docker.internal:1234"
+    mode: "individual"
+    max_concurrent: 1
+    timeout: 300s
+    queue:
+      max_size: 100
+      low_priority_shed_at: 30
+      medium_priority_shed_at: 60
+      request_max_age: 60s
 
   - name: "batch-service"
-    url: "http://localhost:8000"
+    url: "http://httpbin:80"
     mode: "batch"
-    batch_size: 5      # Bigger batches for visibility
-    batch_timeout: 500ms  # Longer timeout to collect full batches
-    max_concurrent: 1  # Process one batch at a time
+    batch_size: 5
+    batch_timeout: 100ms
+    max_concurrent: 1
     timeout: 30s
+    queue:
+      max_size: 2000
+      low_priority_shed_at: 1000
+      medium_priority_shed_at: 1500
+      request_max_age: 120s
 
-queues:
-  max_size: 1000

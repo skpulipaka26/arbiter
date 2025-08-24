@@ -3,14 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"arbiter/internal/config"
+	"arbiter/internal/logger"
 	"arbiter/internal/metrics"
 	"arbiter/internal/processor"
 	"arbiter/internal/queue"
@@ -18,25 +17,45 @@ import (
 )
 
 func main() {
-	fmt.Println("🚀 Arbiter - Universal Priority Gateway")
-	
+	fmt.Println("Arbiter - Universal Priority Gateway")
+
+	logger.Init("arbiter")
+
 	// Load configuration
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logger.Default().WithField("error", err.Error()).Error("Failed to load config")
+		os.Exit(1)
 	}
-	
+
+	// Initialize OTEL tracing
+	ctx := context.Background()
+	if cfg.Tracing.Enabled {
+		tracerProvider, err := metrics.InitTracing(ctx, "arbiter", cfg.Tracing.Endpoint)
+		if err != nil {
+			logger.Default().WithField("error", err.Error()).Warn("Failed to initialize tracing, continuing without it")
+			// Continue without tracing
+		} else {
+			defer func() {
+				if err := tracerProvider.Shutdown(ctx); err != nil {
+					logger.Default().WithField("error", err.Error()).Error("Error shutting down tracer provider")
+				}
+			}()
+		}
+	}
+
 	// Initialize OTEL metrics
 	otelMetrics, meter, err := metrics.InitOTEL()
 	if err != nil {
-		log.Fatalf("Failed to initialize OTEL metrics: %v", err)
+		logger.Default().WithField("error", err.Error()).Error("Failed to initialize OTEL metrics")
+		os.Exit(1)
 	}
-	
+
 	// Create components
-	q := queue.New()
+	q := queue.New(cfg.Upstreams)
 	proc := processor.New(cfg, q)
 	srv := server.New(cfg, q)
-	
+
 	// Register metric callbacks
 	err = otelMetrics.RegisterCallbacks(meter,
 		func() map[string]map[string]int64 {
@@ -61,43 +80,42 @@ func main() {
 			return result
 		})
 	if err != nil {
-		log.Fatalf("Failed to register metric callbacks: %v", err)
+		logger.Default().WithField("error", err.Error()).Error("Failed to register metric callbacks")
+		os.Exit(1)
 	}
-	
+
 	// Start processor
 	proc.Start()
 	defer proc.Stop()
-	
+
 	// Start HTTP server
 	go func() {
-		log.Printf("Starting server on port %d", cfg.Port)
+		logger.Default().Info(fmt.Sprintf("Starting server on port %d", cfg.Port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			logger.Default().WithField("error", err.Error()).Error("Server failed")
+			os.Exit(1)
 		}
 	}()
-	
+
 	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
-	
-	log.Println("Shutting down gracefully...")
-	
-	// Create shutdown context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	
+
+	logger.Default().Info("Shutting down gracefully...")
+
 	// Shutdown server first (stops accepting new requests)
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
+	// Use context.Background() to wait indefinitely for connections to close
+	if err := srv.Shutdown(context.Background()); err != nil {
+		logger.Default().WithField("error", err.Error()).Error("Server shutdown error")
 	}
-	log.Println("Server stopped")
-	
-	// Stop processor (waits for workers)
+	logger.Default().Info("Server stopped accepting new requests")
+
+	// Wait for queues to drain and processor to finish all work
 	proc.Stop()
-	log.Println("Processor stopped")
-	
+	logger.Default().Info("Processor stopped - all queued requests processed")
+
 	// Stop queue maintenance
 	q.Shutdown()
-	log.Println("Queue stopped")
+	logger.Default().Info("Queue maintenance stopped")
 }

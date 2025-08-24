@@ -3,13 +3,18 @@ package server
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"time"
 
 	"arbiter/internal/config"
+	"arbiter/internal/logger"
 	"arbiter/internal/metrics"
 	"arbiter/internal/queue"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Server struct {
@@ -23,89 +28,120 @@ func New(cfg *config.Config, q *queue.Queue) *Server {
 		config: cfg,
 		queue:  q,
 	}
-	
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/stats", s.handleStats)
 	mux.HandleFunc("/metrics", s.handleMetrics)
-	
+
+	// Wrap the mux with OTEL HTTP instrumentation
+	// This automatically extracts trace context from incoming requests
+	handler := otelhttp.NewHandler(mux, "arbiter",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	)
+
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 300 * time.Second,
 	}
-	
+
 	return s
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
-	
-	// Create request
-	req := queue.NewRequest(r)
+	ctx := r.Context()
+
+	ctx, span := metrics.StartSpan(ctx, "arbiter.handleRequest",
+		attribute.String("http.method", r.Method),
+		attribute.String("http.url", r.URL.Path),
+		attribute.String("http.remote_addr", r.RemoteAddr),
+	)
+	defer span.End()
+
+	log := logger.FromContext(ctx)
+	log.WithField("method", r.Method).
+		WithField("path", r.URL.Path).
+		WithField("remote_addr", r.RemoteAddr).
+		Info("Received request")
+
+	req := queue.NewRequestWithContext(ctx, r)
 	defer req.Cancel()
-	
-	log.Printf("Request %s has upstream: %s, priority: %s", req.ID, req.UpstreamName, req.Priority)
-	
-	// Validate upstream exists
-	upstreamExists := false
-	for _, upstream := range s.config.Upstreams {
-		if upstream.Name == req.UpstreamName {
-			upstreamExists = true
+
+	var upstreamConfig *config.Upstream
+	for i := range s.config.Upstreams {
+		if s.config.Upstreams[i].Name == req.UpstreamName {
+			upstreamConfig = &s.config.Upstreams[i]
 			break
 		}
 	}
-	
-	if !upstreamExists {
-		log.Printf("Unknown upstream: %s (available: simple-api, batch-service)", req.UpstreamName)
+
+	if upstreamConfig == nil {
+		span.SetAttributes(attribute.String("error", "unknown_upstream"))
+		log.WithField("upstream", req.UpstreamName).
+			Warn("Unknown upstream requested")
 		http.Error(w, fmt.Sprintf("Unknown upstream: %s", req.UpstreamName), http.StatusBadRequest)
 		return
 	}
-	
-	// Check queue size limit
-	if s.queue.Length(req.UpstreamName) >= s.config.Queues.MaxSize {
-		log.Printf("Queue full for upstream: %s", req.UpstreamName)
+
+	if s.queue.Length(req.UpstreamName) >= upstreamConfig.Queue.MaxSize {
+		span.SetAttributes(attribute.String("error", "queue_full"))
+		log.WithField("upstream", req.UpstreamName).
+			WithField("queue_size", s.queue.Length(req.UpstreamName)).
+			Warn("Queue full, rejecting request")
 		http.Error(w, "Queue full", http.StatusTooManyRequests)
 		return
 	}
-	
-	// Enqueue request
+
+	span.SetAttributes(
+		attribute.String("upstream", req.UpstreamName),
+		attribute.String("priority", req.Priority.String()),
+		attribute.String("request_id", req.ID),
+	)
+
 	if err := s.queue.Enqueue(req); err != nil {
+		span.RecordError(err)
 		if otel := metrics.GetOTEL(); otel != nil {
-			otel.RecordShed(r.Context(), req.UpstreamName, req.Priority.String())
+			otel.RecordShed(ctx, req.UpstreamName, req.Priority.String())
 		}
+		log.WithField("upstream", req.UpstreamName).
+			WithField("priority", req.Priority.String()).
+			WithField("error", err.Error()).
+			Error("Request shed due to overload")
 		http.Error(w, "Service overloaded", http.StatusServiceUnavailable)
 		return
 	}
-	
-	// Wait for response
+
+	// Wait for the processor to signal the request is ready
 	select {
 	case response := <-req.ResponseChan:
 		if response.Error != nil {
-			log.Printf("Request %s failed: %v", req.ID, response.Error)
+			span.RecordError(response.Error)
+			log.WithField("request_id", req.ID).
+				WithField("error", response.Error.Error()).
+				Error("Request processing failed")
 			http.Error(w, "Upstream error", http.StatusBadGateway)
 			return
 		}
-		
-		// Copy headers
-		for k, v := range response.Headers {
-			for _, val := range v {
-				w.Header().Add(k, val)
-			}
+
+		if !response.Ready {
+			span.SetAttributes(attribute.String("error", "invalid_response"))
+			log.WithField("request_id", req.ID).
+				Error("Received invalid response format")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
-		
-		// Write response
-		w.WriteHeader(response.StatusCode)
-		w.Write(response.Body)
-		
-		// Request completed
-		
+
+		// Request has been dequeued and is ready to be proxied
+		span.AddEvent("proxying_request")
+		s.proxyRequest(ctx, w, r, response.UpstreamURL)
+
 	case <-r.Context().Done():
 		// Request cancelled by client
 		return
-		
+
 	case <-time.After(5 * time.Minute):
 		http.Error(w, "Request timeout", http.StatusGatewayTimeout)
 		return
@@ -121,7 +157,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	fmt.Fprintf(w, `{"queues":{`)
 	first := true
 	for _, upstream := range s.config.Upstreams {
@@ -146,4 +182,32 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
+}
+
+func (s *Server) proxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, upstreamURL string) {
+	ctx, span := metrics.StartSpan(ctx, "arbiter.proxyRequest",
+		attribute.String("upstream.url", upstreamURL),
+	)
+	defer span.End()
+
+	targetURL, err := url.Parse(upstreamURL)
+	if err != nil {
+		span.RecordError(err)
+		http.Error(w, "Invalid upstream URL", http.StatusInternalServerError)
+		return
+	}
+
+	// Create an HTTP client with OTEL instrumentation
+	transport := otelhttp.NewTransport(http.DefaultTransport)
+
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = transport
+
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.Host = targetURL.Host
+	}
+
+	proxy.ServeHTTP(w, r.WithContext(ctx))
 }

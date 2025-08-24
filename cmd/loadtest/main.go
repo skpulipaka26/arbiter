@@ -75,7 +75,7 @@ func generatePriority() string {
 func generateUpstream() string {
 	r := rand.Float64()
 	if r < 0.7 { // 70% individual mode
-		return "simple-api"
+		return "api-service"
 	} else { // 30% batch mode
 		return "batch-service"
 	}
@@ -293,10 +293,10 @@ func calculateStats(results []TestResult) PriorityStats {
 
 func printResults(stats TestStats) {
 	fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
-	fmt.Printf("🚀 ARBITER LOAD TEST RESULTS\n")
+	fmt.Printf("ARBITER LOAD TEST RESULTS\n")
 	fmt.Printf(strings.Repeat("=", 80) + "\n")
 
-	fmt.Printf("📊 OVERALL PERFORMANCE:\n")
+	fmt.Printf("OVERALL PERFORMANCE:\n")
 	fmt.Printf("  Total Requests:      %d\n", stats.TotalRequests)
 	fmt.Printf("  Successful:          %d (%.1f%%)\n",
 		stats.SuccessfulReqs, float64(stats.SuccessfulReqs)/float64(stats.TotalRequests)*100)
@@ -305,7 +305,7 @@ func printResults(stats TestStats) {
 	fmt.Printf("  Test Duration:       %v\n", stats.TestDuration)
 	fmt.Printf("  Requests/sec:        %.2f\n", stats.RequestsPerSec)
 
-	fmt.Printf("\n🎯 PRIORITY BREAKDOWN:\n")
+	fmt.Printf("\nPRIORITY BREAKDOWN:\n")
 	fmt.Printf(strings.Repeat("-", 80) + "\n")
 	priorities := []string{"high", "medium", "low"}
 	for _, priority := range priorities {
@@ -320,7 +320,7 @@ func printResults(stats TestStats) {
 		}
 	}
 
-	fmt.Printf("🔄 UPSTREAM BREAKDOWN:\n")
+	fmt.Printf("UPSTREAM BREAKDOWN:\n")
 	fmt.Printf(strings.Repeat("-", 80) + "\n")
 	for upstream, ustats := range stats.UpstreamStats {
 		fmt.Printf("  %s:\n", upstream)
@@ -331,7 +331,7 @@ func printResults(stats TestStats) {
 	}
 
 	if len(stats.ErrorDistribution) > 0 {
-		fmt.Printf("❌ ERROR BREAKDOWN:\n")
+		fmt.Printf("ERROR BREAKDOWN:\n")
 		fmt.Printf(strings.Repeat("-", 80) + "\n")
 		for error, count := range stats.ErrorDistribution {
 			fmt.Printf("  %s: %d\n", error, count)
@@ -344,7 +344,7 @@ func printResults(stats TestStats) {
 	lowStats := stats.PriorityStats["low"]
 
 	if highStats.SuccessCount > 0 && mediumStats.SuccessCount > 0 && lowStats.SuccessCount > 0 {
-		fmt.Printf("⚡ PRIORITY EFFECTIVENESS:\n")
+		fmt.Printf("PRIORITY EFFECTIVENESS:\n")
 		fmt.Printf(strings.Repeat("-", 80) + "\n")
 		fmt.Printf("  High vs Medium:    %.2fx faster\n",
 			float64(mediumStats.AvgResponseTime)/float64(highStats.AvgResponseTime))
@@ -356,10 +356,10 @@ func printResults(stats TestStats) {
 
 		if highStats.AvgResponseTime <= mediumStats.AvgResponseTime &&
 			mediumStats.AvgResponseTime <= lowStats.AvgResponseTime {
-			fmt.Printf("✅ PRIORITY SYSTEM WORKING CORRECTLY!\n")
+			fmt.Printf("PRIORITY SYSTEM WORKING CORRECTLY!\n")
 			fmt.Printf("   High ≤ Medium ≤ Low response times\n")
 		} else {
-			fmt.Printf("⚠️  Priority ordering issues detected\n")
+			fmt.Printf("Priority ordering issues detected\n")
 		}
 		fmt.Printf("\n")
 	}
@@ -368,29 +368,29 @@ func printResults(stats TestStats) {
 }
 
 func main() {
-	fmt.Println("🚀 Arbiter Load Test")
+	fmt.Println("Arbiter Load Test")
 	fmt.Println("====================")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get("http://localhost:8080/health")
 	if err != nil {
-		log.Fatalf("❌ Arbiter not running: %v\n", err)
+		log.Fatalf("Arbiter not running: %v\n", err)
 	}
 	resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Fatalf("❌ Arbiter not healthy: status %d\n", resp.StatusCode)
+		log.Fatalf("Arbiter not healthy: status %d\n", resp.StatusCode)
 	}
 
-	fmt.Println("✅ Arbiter is healthy, starting load test...")
+	fmt.Println("Arbiter is healthy, starting load test...")
 
 	config := &LoadTestConfig{
-		TotalRequests:   1000,
-		ConcurrentUsers: 50,
+		TotalRequests:   5000,
+		ConcurrentUsers: 100,
 		ArbiterURL:      "http://localhost:8080",
 	}
 
-	fmt.Printf("📋 Test Configuration:\n")
+	fmt.Printf("Test Configuration:\n")
 	fmt.Printf("  Total Requests: %d\n", config.TotalRequests)
 	fmt.Printf("  Concurrent Users: %d\n", config.ConcurrentUsers)
 	fmt.Printf("  Target: %s\n", config.ArbiterURL)
@@ -402,8 +402,8 @@ func main() {
 	results := runLoadTest(config)
 	totalTime := time.Since(startTime)
 
-	fmt.Printf("✅ Load test completed in %v\n", totalTime)
-	fmt.Printf("📊 Collected %d results\n", len(results))
+	fmt.Printf("Load test completed in %v\n", totalTime)
+	fmt.Printf("Collected %d results\n", len(results))
 
 	stats := analyzeResults(results)
 	printResults(stats)
@@ -412,9 +412,9 @@ func main() {
 	if err == nil {
 		filename := fmt.Sprintf("arbiter_loadtest_%d.json", time.Now().Unix())
 		if err := os.WriteFile(filename, jsonData, 0644); err == nil {
-			fmt.Printf("📄 Detailed results saved to %s\n", filename)
+			fmt.Printf("Detailed results saved to %s\n", filename)
 		}
 	}
 
-	fmt.Println("🎉 Load test completed successfully!")
+	fmt.Println("Load test completed successfully!")
 }

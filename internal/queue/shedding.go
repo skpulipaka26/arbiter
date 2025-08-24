@@ -38,8 +38,8 @@ func (q *Queue) performMaintenance() {
 				// Remove and send error response
 				heap.Pop(pq)
 				req.ResponseChan <- &Response{
-					StatusCode: 503,
-					Error:      fmt.Errorf("request shed due to overload"),
+					Error: fmt.Errorf("request shed due to overload"),
+					Ready: false,
 				}
 				req.Cancel()
 			} else {
@@ -55,8 +55,14 @@ func (q *Queue) performMaintenance() {
 }
 
 func (q *Queue) shouldShedRequestUnsafe(req *Request) bool {
+	// Get config for this upstream
+	cfg, exists := q.configs[req.UpstreamName]
+	if !exists {
+		return true // Shed if no config
+	}
+	
 	// Age-based shedding
-	if time.Since(req.EnqueuedAt) > 30*time.Second {
+	if time.Since(req.EnqueuedAt) > cfg.RequestMaxAge {
 		return true
 	}
 

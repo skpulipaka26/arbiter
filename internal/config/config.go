@@ -83,6 +83,10 @@ func Load(filename string) (*Config, error) {
 }
 
 func validateConfig(config *Config) error {
+	if config.Port <= 0 || config.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", config.Port)
+	}
+
 	if config.Upstream.URL == "" {
 		return fmt.Errorf("upstream.url is required")
 	}
@@ -137,10 +141,6 @@ func validateConfig(config *Config) error {
 	if config.Upstream.Queue.LowPriorityShedAt >= config.Upstream.Queue.MediumPriorityShedAt {
 		return fmt.Errorf("queue.low_priority_shed_at (%d) should be less than medium_priority_shed_at (%d)",
 			config.Upstream.Queue.LowPriorityShedAt, config.Upstream.Queue.MediumPriorityShedAt)
-	}
-
-	if config.Port <= 0 || config.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535, got %d", config.Port)
 	}
 
 	return nil

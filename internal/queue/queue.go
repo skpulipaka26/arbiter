@@ -79,6 +79,12 @@ func (r *Request) Cancel() {
 	}
 }
 
+// SetContextForTesting sets the context for testing purposes
+func (r *Request) SetContextForTesting(ctx context.Context) {
+	r.ctx = ctx
+	r.cancel = func() {} // Dummy cancel for testing
+}
+
 type PriorityQueue []*Request
 
 func (pq PriorityQueue) Len() int { return len(pq) }
@@ -143,10 +149,17 @@ func (q *Queue) Enqueue(req *Request) error {
 	defer q.mutex.Unlock()
 
 	queueSize := q.queue.Len()
-	if queueSize > q.config.LowPriorityShedAt && req.Priority == Low {
+	
+	// Check absolute max size first
+	if queueSize >= q.config.MaxSize {
+		return fmt.Errorf("queue full: at maximum capacity")
+	}
+	
+	// Check priority-based shedding
+	if queueSize >= q.config.LowPriorityShedAt && req.Priority == Low {
 		return fmt.Errorf("request shed due to overload")
 	}
-	if queueSize > q.config.MediumPriorityShedAt && (req.Priority == Low || req.Priority == Medium) {
+	if queueSize >= q.config.MediumPriorityShedAt && (req.Priority == Low || req.Priority == Medium) {
 		return fmt.Errorf("request shed due to extreme overload")
 	}
 

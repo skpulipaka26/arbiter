@@ -9,6 +9,7 @@ import (
 	"arbiter/internal/logger"
 	"arbiter/internal/observability"
 	"arbiter/internal/queue"
+
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -93,12 +94,12 @@ func (w *Worker) runIndividualProcessor() {
 					<-semaphore
 					continue
 				}
-				
+
 				logger.FromContext(req.Context()).
 					WithField("request_id", req.ID).
 					WithField("priority", req.Priority.String()).
 					Info("Request dequeued")
-				
+
 				go func(request *queue.Request) {
 					defer func() { <-semaphore }()
 					w.processIndividualRequest(request)
@@ -116,7 +117,7 @@ func (w *Worker) processIndividualRequest(req *queue.Request) {
 		attribute.String("priority", req.Priority.String()),
 	)
 	defer span.End()
-	
+
 	start := time.Now()
 	queueTime := time.Since(req.EnqueuedAt)
 
@@ -129,28 +130,38 @@ func (w *Worker) processIndividualRequest(req *queue.Request) {
 	if otel := observability.GetOTEL(); otel != nil {
 		otel.RecordQueueTime(ctx, "upstream", req.Priority.String(), queueTime)
 	}
-	
+
 	span.SetAttributes(
 		attribute.Int64("queue_time_ms", queueTime.Milliseconds()),
 	)
 
 	req.ResponseChan <- &queue.Response{
-		Ready: true,
+		Ready:       true,
 		UpstreamURL: w.upstream.URL,
 	}
 
 	if otel := observability.GetOTEL(); otel != nil {
 		otel.RecordRequest(ctx, "upstream", req.Priority.String(), time.Since(start), "forwarded")
 	}
-	
+
 	span.AddEvent("request_forwarded")
 }
 
 func (w *Worker) runBatchProcessor() {
-	ticker := time.NewTicker(time.Duration(w.upstream.BatchTimeout))
-	defer ticker.Stop()
+	timeout := time.NewTicker(w.upstream.BatchTimeout)
+	defer timeout.Stop()
 
 	var batch []*queue.Request
+	lastFlush := time.Now()
+
+	// Smart polling: fast for aggressive timeouts, adaptive for relaxed ones
+	basePoll := min(w.upstream.BatchTimeout/10, 50*time.Millisecond)
+	pollInterval := basePoll
+	pollTicker := time.NewTicker(pollInterval)
+	defer pollTicker.Stop()
+	
+	emptyPolls := 0
+	activePolls := 0
 
 	for {
 		select {
@@ -160,20 +171,97 @@ func (w *Worker) runBatchProcessor() {
 			}
 			return
 
-		case <-ticker.C:
+		case <-timeout.C:
+			// Timeout fallback - flush whatever we have
+			if len(batch) > 0 {
+				w.processBatch(batch)
+				batch = batch[:0]
+				lastFlush = time.Now()
+			}
+
+		case <-pollTicker.C:
+			// Try to fill the batch
+			foundAny := false
 			for len(batch) < w.upstream.BatchSize {
 				req := w.queue.Dequeue()
 				if req == nil {
 					break
 				}
+				foundAny = true
 				batch = append(batch, req)
 			}
+			
+			// Adaptive polling for relaxed timeouts (>= 100ms)
+			if w.upstream.BatchTimeout >= 100*time.Millisecond {
+				if foundAny || len(batch) > 0 {
+					// Activity detected
+					emptyPolls = 0
+					activePolls++
+					
+					// Speed up after sustained activity (hysteresis)
+					if activePolls >= 3 && pollInterval > 5*time.Millisecond {
+						pollInterval = 5*time.Millisecond
+						pollTicker.Reset(pollInterval)
+						activePolls = 0
+					}
+				} else {
+					// No activity
+					activePolls = 0
+					emptyPolls++
+					
+					// Slow down after sustained idle (hysteresis)
+					if emptyPolls >= 10 && pollInterval < basePoll {
+						pollInterval = min(pollInterval*2, basePoll)
+						pollTicker.Reset(pollInterval)
+						emptyPolls = 0
+					}
+				}
+			}
 
-			if len(batch) > 0 {
+			// Check if we should flush
+			if w.shouldFlushBatch(batch, time.Since(lastFlush)) {
 				w.processBatch(batch)
 				batch = batch[:0]
+				lastFlush = time.Now()
+				timeout.Reset(w.upstream.BatchTimeout)
 			}
 		}
+	}
+}
+
+func (w *Worker) shouldFlushBatch(batch []*queue.Request, elapsed time.Duration) bool {
+	if len(batch) == 0 {
+		return false
+	}
+
+	size := len(batch)
+	maxSize := w.upstream.BatchSize
+
+	// Count priority distribution
+	hasHigh := false
+	hasMedium := false
+	for _, req := range batch {
+		if req.Priority == queue.High {
+			hasHigh = true
+			break
+		} else if req.Priority == queue.Medium {
+			hasMedium = true
+		}
+	}
+
+	// Priority-based flush rules
+	switch {
+	case hasHigh:
+		// High priority: flush immediately (after 10ms grace)
+		return elapsed > 10*time.Millisecond
+
+	case hasMedium:
+		// Medium priority: flush at 50% capacity or 50ms
+		return size >= maxSize/2 || elapsed > 50*time.Millisecond
+
+	default:
+		// Low priority only: wait for full batch
+		return size >= maxSize
 	}
 }
 
@@ -196,7 +284,6 @@ func (w *Worker) processBatch(batch []*queue.Request) {
 		}
 	}
 
-
 	if otel := observability.GetOTEL(); otel != nil && len(batch) > 0 {
 		otel.RecordBatch(batch[0].Context(), "upstream", int64(batchSize))
 	}
@@ -204,12 +291,12 @@ func (w *Worker) processBatch(batch []*queue.Request) {
 	for _, req := range batch {
 		go func(request *queue.Request) {
 			reqStart := time.Now()
-			
+
 			request.ResponseChan <- &queue.Response{
 				Ready:       true,
 				UpstreamURL: w.upstream.URL,
 			}
-			
+
 			if otel := observability.GetOTEL(); otel != nil {
 				otel.RecordRequest(request.Context(), "upstream", request.Priority.String(), time.Since(reqStart), "forwarded")
 			}
@@ -217,4 +304,3 @@ func (w *Worker) processBatch(batch []*queue.Request) {
 	}
 
 }
-

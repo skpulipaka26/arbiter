@@ -1,0 +1,19 @@
+port: 8080
+
+upstreams:
+  - name: "simple-api"
+    url: "http://localhost:8000"
+    mode: "individual"
+    max_concurrent: 2  # Low concurrency to see queueing
+    timeout: 60s
+
+  - name: "batch-service"
+    url: "http://localhost:8000"
+    mode: "batch"
+    batch_size: 5      # Bigger batches for visibility
+    batch_timeout: 500ms  # Longer timeout to collect full batches
+    max_concurrent: 1  # Process one batch at a time
+    timeout: 30s
+
+queues:
+  max_size: 1000

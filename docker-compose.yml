@@ -1,0 +1,10 @@
+services:
+  image: kennethreitz/httpbin
+  ports:
+    - "8000:80"
+  restart: unless-stopped
+
+volumes:
+  tempo-data:
+  grafana-data:
+  prometheus-data:

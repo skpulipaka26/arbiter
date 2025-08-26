@@ -11,7 +11,7 @@ Arbiter solves this by implementing intelligent request management between clien
 ## Key Features
 
 ### Smart Priority Management
-Arbiter uses a binary min-heap priority queue with O(log n) operations, ensuring efficient handling even with thousands of queued requests. Requests are classified into three priority levels based on the `Priority` header, with FIFO ordering within each level.
+Arbiter uses a binary min-heap priority queue with O(log n) operations, ensuring efficient handling even with thousands of queued requests. Requests are classified into configurable priority levels based on the `Priority` header, with FIFO ordering within each level. The priority system is fully customizable, allowing you to define your own priority levels, aliases, and load shedding thresholds.
 
 ### Intelligent Batching
 In batch mode, Arbiter doesn't just wait for timeouts. It continuously monitors request priorities and makes intelligent flush decisions:
@@ -28,9 +28,10 @@ The system uses adaptive polling that speeds up to 5ms under load and backs off 
 - **Minimal memory footprint**: Only request metadata is queued, not request bodies
 
 ### Graceful Degradation
-Under load, Arbiter implements graduated load shedding:
-- Queue exceeds `low_priority_shed_at` → reject low-priority requests
-- Queue exceeds `medium_priority_shed_at` → only accept high-priority
+Under load, Arbiter implements graduated load shedding based on configurable priority levels:
+- Each priority level can have its own `shed_at` threshold
+- When queue size exceeds a priority's threshold, requests at that priority level and lower are rejected
+- Higher priority requests continue to be accepted until their own thresholds are reached
 - Queue full → reject all requests with 429 status
 
 Requests that exceed `request_max_age` are automatically dropped to prevent processing stale work.
@@ -66,9 +67,19 @@ upstream:
   max_concurrent: 10            # Parallel requests to upstream
   queue:
     max_size: 100
-    low_priority_shed_at: 30
-    medium_priority_shed_at: 60
     request_max_age: 60s
+    priorities:
+      - name: high
+        value: 0                # Lower values = higher priority
+        aliases: ["urgent", "critical", "p0"]
+      - name: medium
+        value: 1
+        aliases: ["normal", "standard", "p1"]
+        shed_at: 60             # Shed when queue > 60
+      - name: low
+        value: 2
+        aliases: ["background", "batch", "p2"]
+        shed_at: 30             # Shed when queue > 30
 ```
 
 ### Batch Mode (for ML inference)
@@ -82,9 +93,47 @@ upstream:
   batch_timeout: 5s            # Safety timeout (rarely triggered)
   queue:
     max_size: 1000
-    low_priority_shed_at: 500
-    medium_priority_shed_at: 800
     request_max_age: 30s
+    priorities:
+      - name: high
+        value: 0
+        aliases: ["urgent", "critical"]
+      - name: medium
+        value: 1
+        aliases: ["normal", "standard"]
+        shed_at: 800
+      - name: low
+        value: 2
+        aliases: ["background", "batch"]
+        shed_at: 500
+```
+
+### Custom Priority Levels
+You can define your own priority scheme:
+
+```yaml
+queue:
+  priorities:
+    - name: critical
+      value: 0
+      aliases: ["p0", "emergency"]
+      # No shed_at means never shed
+    - name: high
+      value: 1
+      aliases: ["p1", "important"]
+      shed_at: 90
+    - name: normal
+      value: 2
+      aliases: ["p2", "standard"]
+      shed_at: 70
+    - name: low
+      value: 3
+      aliases: ["p3", "batch"]
+      shed_at: 50
+    - name: background
+      value: 4
+      aliases: ["p4", "bulk"]
+      shed_at: 30
 ```
 
 ### Configuration Validation
@@ -92,7 +141,9 @@ upstream:
 Arbiter validates all settings at startup:
 - Mode must be "individual" or "batch"
 - Batch mode requires batch_size and batch_timeout
-- Queue thresholds must be logical (low < medium < max)
+- Priority values must be unique
+- Shed thresholds must be in decreasing order (higher priorities shed last)
+- Shed thresholds cannot exceed max_size
 - Port must be valid (1-65535)
 
 ## Deployment
@@ -195,11 +246,13 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   -d '{"model": "llama-2", "messages": [{"role": "user", "content": "Batch processing"}]}'
 ```
 
-Priority mappings:
-- `high`, `urgent`, `critical` → High priority
-- `medium`, `normal`, `standard` → Medium priority  
-- `low`, `background`, `batch` → Low priority
-- No header → Low priority (default)
+Priority mappings are configurable via the `priorities` section in config.yaml. By default:
+- `high`, `urgent`, `critical`, `p0` → High priority
+- `medium`, `normal`, `standard`, `p1` → Medium priority  
+- `low`, `background`, `batch`, `p2` → Low priority
+- No header → Lowest configured priority (default)
+
+You can customize these mappings by defining your own priority levels and aliases in the configuration.
 
 ### Monitoring
 

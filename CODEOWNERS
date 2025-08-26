@@ -1,0 +1,36 @@
+# CODEOWNERS file for Arbiter
+# This file defines who is responsible for code in this repository.
+# These owners will be the default owners for everything in the repo.
+# They will be requested for review when someone opens a pull request.
+
+# Global owner for all files
+* @skpulipaka
+
+# Core components
+/internal/config/ @skpulipaka
+/internal/queue/ @skpulipaka
+/internal/processor/ @skpulipaka
+/internal/server/ @skpulipaka
+/internal/logger/ @skpulipaka
+/internal/observability/ @skpulipaka
+
+# Command line tools
+/cmd/ @skpulipaka
+
+# Configuration and deployment
+/config.yaml @skpulipaka
+/docker-compose.yml @skpulipaka
+/Dockerfile @skpulipaka
+*.yaml @skpulipaka
+*.yml @skpulipaka
+
+# Documentation
+*.md @skpulipaka
+/LICENSE @skpulipaka
+
+# Build and dependencies
+/go.mod @skpulipaka
+/go.sum @skpulipaka
+
+# CI/CD (when added)
+/.github/ @skpulipaka

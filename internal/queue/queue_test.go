@@ -12,13 +12,10 @@ import (
 // and FIFO within same priority. This is critical for the entire system.
 func TestPriorityOrdering(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: config.TestQueueConfigWithShedding(50, 80),
 	}
+	cfg.Queue.MaxSize = 100
+	cfg.Queue.RequestMaxAge = time.Minute
 	q := New(cfg)
 
 	// Create requests with different priorities and timestamps
@@ -74,12 +71,7 @@ func TestPriorityOrdering(t *testing.T) {
 // This protects the system from overload
 func TestLoadShedding(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              10,
-			LowPriorityShedAt:    3,
-			MediumPriorityShedAt: 7,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: config.TestQueueConfigWithShedding(3, 7),
 	}
 	q := New(cfg)
 
@@ -161,13 +153,11 @@ func TestLoadShedding(t *testing.T) {
 // TestLazyStaleRemoval verifies that stale requests are removed during dequeue,
 // not through periodic scanning
 func TestLazyStaleRemoval(t *testing.T) {
+	qcfg := config.TestQueueConfigWithShedding(50, 80)
+	qcfg.MaxSize = 100
+	qcfg.RequestMaxAge = 50 * time.Millisecond // Very short for testing
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        50 * time.Millisecond, // Very short for testing
-		},
+		Queue: qcfg,
 	}
 	q := New(cfg)
 
@@ -216,12 +206,12 @@ func TestLazyStaleRemoval(t *testing.T) {
 // TestCancelledRequestRemoval verifies cancelled contexts are handled
 func TestCancelledRequestRemoval(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -272,12 +262,12 @@ func TestCancelledRequestRemoval(t *testing.T) {
 // TestQueueMetrics verifies priority counting for observability
 func TestQueueMetrics(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -323,12 +313,12 @@ func TestQueueMetrics(t *testing.T) {
 // TestConcurrentAccess verifies thread-safety under concurrent operations
 func TestConcurrentAccess(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              1000,
-			LowPriorityShedAt:    500,
-			MediumPriorityShedAt: 800,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(500, 800)
+			cfg.MaxSize = 1000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 

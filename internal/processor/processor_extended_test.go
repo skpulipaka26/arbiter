@@ -134,12 +134,12 @@ func TestQueueProcessorIntegration(t *testing.T) {
 			Mode:         "batch",
 			BatchSize:    5,
 			BatchTimeout: 100 * time.Millisecond,
-			Queue: config.QueueConfig{
-				MaxSize:              100,
-				LowPriorityShedAt:    50,
-				MediumPriorityShedAt: 80,
-				RequestMaxAge:        time.Minute,
-			},
+			Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 		}
 		q := queue.New(cfg)
 
@@ -195,12 +195,12 @@ func TestQueueProcessorIntegration(t *testing.T) {
 		cfg := config.Upstream{
 			Mode:          "individual",
 			MaxConcurrent: 3,
-			Queue: config.QueueConfig{
-				MaxSize:              100,
-				LowPriorityShedAt:    50,
-				MediumPriorityShedAt: 80,
-				RequestMaxAge:        time.Minute,
-			},
+			Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 		}
 		q := queue.New(cfg)
 
@@ -268,12 +268,12 @@ func TestQueueProcessorIntegration(t *testing.T) {
 // TestStaleRequestRemoval verifies stale requests are handled correctly
 func TestStaleRequestRemoval(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        50 * time.Millisecond,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = 50 * time.Millisecond
+			return cfg
+		}(),
 	}
 	q := queue.New(cfg)
 
@@ -311,12 +311,12 @@ func TestStaleRequestRemoval(t *testing.T) {
 // TestContextCancellationCleanup tests proper cleanup on cancellation
 func TestContextCancellationCleanup(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := queue.New(cfg)
 
@@ -356,12 +356,12 @@ func TestContextCancellationCleanup(t *testing.T) {
 // TestQueueShedding tests the graduated load shedding
 func TestQueueShedding(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              20,
-			LowPriorityShedAt:    8,
-			MediumPriorityShedAt: 15,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(8, 15)
+			cfg.MaxSize = 20
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := queue.New(cfg)
 
@@ -423,12 +423,12 @@ func TestQueueShedding(t *testing.T) {
 // TestConcurrentQueueOperations tests thread safety
 func TestConcurrentQueueOperations(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              1000,
-			LowPriorityShedAt:    500,
-			MediumPriorityShedAt: 800,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(500, 800)
+			cfg.MaxSize = 1000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := queue.New(cfg)
 
@@ -510,12 +510,12 @@ func TestProcessorWithEmptyQueue(t *testing.T) {
 			Mode:         "batch",
 			BatchSize:    5,
 			BatchTimeout: 50 * time.Millisecond,
-			Queue: config.QueueConfig{
-				MaxSize:              100,
-				LowPriorityShedAt:    50,
-				MediumPriorityShedAt: 80,
-				RequestMaxAge:        time.Minute,
-			},
+			Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 		},
 	}
 	q := queue.New(cfg.Upstream)
@@ -546,12 +546,12 @@ func TestRapidStartStop(t *testing.T) {
 		Upstream: config.Upstream{
 			Mode:          "individual",
 			MaxConcurrent: 2,
-			Queue: config.QueueConfig{
-				MaxSize:              100,
-				LowPriorityShedAt:    50,
-				MediumPriorityShedAt: 80,
-				RequestMaxAge:        time.Minute,
-			},
+			Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 		},
 	}
 	q := queue.New(cfg.Upstream)
@@ -580,12 +580,12 @@ func TestRapidStartStop(t *testing.T) {
 // BenchmarkQueueThroughput benchmarks queue throughput
 func BenchmarkQueueThroughput(b *testing.B) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              10000,
-			LowPriorityShedAt:    5000,
-			MediumPriorityShedAt: 8000,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(5000, 8000)
+			cfg.MaxSize = 10000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := queue.New(cfg)
 

@@ -159,7 +159,7 @@ func (w *Worker) runBatchProcessor() {
 	pollInterval := basePoll
 	pollTicker := time.NewTicker(pollInterval)
 	defer pollTicker.Stop()
-	
+
 	emptyPolls := 0
 	activePolls := 0
 
@@ -190,17 +190,17 @@ func (w *Worker) runBatchProcessor() {
 				foundAny = true
 				batch = append(batch, req)
 			}
-			
+
 			// Adaptive polling for relaxed timeouts (>= 100ms)
 			if w.upstream.BatchTimeout >= 100*time.Millisecond {
 				if foundAny || len(batch) > 0 {
 					// Activity detected
 					emptyPolls = 0
 					activePolls++
-					
+
 					// Speed up after sustained activity (hysteresis)
 					if activePolls >= 3 && pollInterval > 5*time.Millisecond {
-						pollInterval = 5*time.Millisecond
+						pollInterval = 5 * time.Millisecond
 						pollTicker.Reset(pollInterval)
 						activePolls = 0
 					}
@@ -208,7 +208,7 @@ func (w *Worker) runBatchProcessor() {
 					// No activity
 					activePolls = 0
 					emptyPolls++
-					
+
 					// Slow down after sustained idle (hysteresis)
 					if emptyPolls >= 10 && pollInterval < basePoll {
 						pollInterval = min(pollInterval*2, basePoll)
@@ -238,24 +238,21 @@ func (w *Worker) shouldFlushBatch(batch []*queue.Request, elapsed time.Duration)
 	maxSize := w.upstream.BatchSize
 
 	// Count priority distribution
-	hasHigh := false
-	hasMedium := false
+	// Find the highest priority (lowest value) in the batch
+	minPriority := int(queue.Low) // Start with lowest priority
 	for _, req := range batch {
-		if req.Priority == queue.High {
-			hasHigh = true
-			break
-		} else if req.Priority == queue.Medium {
-			hasMedium = true
+		if int(req.Priority) < minPriority {
+			minPriority = int(req.Priority)
 		}
 	}
 
-	// Priority-based flush rules
+	// Priority-based flush rules based on numeric values
 	switch {
-	case hasHigh:
-		// High priority: flush immediately (after 10ms grace)
+	case minPriority <= int(queue.High):
+		// High priority or better: flush immediately (after 10ms grace)
 		return elapsed > 10*time.Millisecond
 
-	case hasMedium:
+	case minPriority <= int(queue.Medium):
 		// Medium priority: flush at 50% capacity or 50ms
 		return size >= maxSize/2 || elapsed > 50*time.Millisecond
 
@@ -268,16 +265,10 @@ func (w *Worker) shouldFlushBatch(batch []*queue.Request, elapsed time.Duration)
 func (w *Worker) processBatch(batch []*queue.Request) {
 	batchSize := len(batch)
 
-	high, medium, low := 0, 0, 0
+	// Count priorities dynamically
+	priorityCounts := make(map[int]int)
 	for _, req := range batch {
-		switch req.Priority {
-		case queue.High:
-			high++
-		case queue.Medium:
-			medium++
-		case queue.Low:
-			low++
-		}
+		priorityCounts[int(req.Priority)]++
 
 		if otel := observability.GetOTEL(); otel != nil {
 			otel.RecordQueueTime(req.Context(), "upstream", req.Priority.String(), time.Since(req.EnqueuedAt))

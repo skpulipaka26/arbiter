@@ -122,12 +122,12 @@ func TestBatchProcessorTiming(t *testing.T) {
 
 	// Create a real queue with test config
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	testQueue := queue.New(cfg)
 
@@ -205,12 +205,12 @@ func TestAdaptivePollingStates(t *testing.T) {
 	// through timing observations
 
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	testQueue := queue.New(cfg)
 
@@ -267,12 +267,12 @@ func TestAdaptivePollingStates(t *testing.T) {
 // TestProcessorShutdown verifies clean shutdown
 func TestProcessorShutdown(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	testQueue := queue.New(cfg)
 
@@ -324,12 +324,12 @@ func TestProcessorShutdown(t *testing.T) {
 // TestIndividualModeConcurrency verifies max_concurrent is respected
 func TestIndividualModeConcurrency(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	testQueue := queue.New(cfg)
 

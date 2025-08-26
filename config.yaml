@@ -9,9 +9,19 @@ upstream:
   mode: "batch"
   batch_size: 2
   batch_timeout: 5s
-  max_concurrent: 1
   queue:
     max_size: 100
-    low_priority_shed_at: 30
-    medium_priority_shed_at: 60
     request_max_age: 60s
+    priorities:
+      - name: high
+        value: 0
+        aliases: ["urgent", "critical", "p0"]
+      - name: medium
+        value: 1
+        aliases: ["normal", "standard", "p1"]
+        shed_at: 60
+      - name: low
+        value: 2
+        aliases: ["background", "batch", "p2"]
+        shed_at: 30
+

@@ -24,12 +24,7 @@ func TestConfigValidation(t *testing.T) {
 					URL:           "http://localhost:8000",
 					Mode:          "individual",
 					MaxConcurrent: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-						RequestMaxAge:        time.Minute,
-					},
+					Queue:         TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: false,
@@ -43,12 +38,7 @@ func TestConfigValidation(t *testing.T) {
 					Mode:         "batch",
 					BatchSize:    10,
 					BatchTimeout: time.Second,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-						RequestMaxAge:        time.Minute,
-					},
+					Queue:        TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: false,
@@ -58,12 +48,8 @@ func TestConfigValidation(t *testing.T) {
 			config: &Config{
 				Port: 8080,
 				Upstream: Upstream{
-					Mode: "individual",
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-					},
+					Mode:  "individual",
+					Queue: TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: true,
@@ -77,11 +63,7 @@ func TestConfigValidation(t *testing.T) {
 					URL:           "://invalid",
 					Mode:          "individual",
 					MaxConcurrent: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-					},
+					Queue:         TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: true,
@@ -92,13 +74,9 @@ func TestConfigValidation(t *testing.T) {
 			config: &Config{
 				Port: 8080,
 				Upstream: Upstream{
-					URL:  "http://localhost:8000",
-					Mode: "invalid",
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-					},
+					URL:   "http://localhost:8000",
+					Mode:  "invalid",
+					Queue: TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: true,
@@ -112,11 +90,7 @@ func TestConfigValidation(t *testing.T) {
 					URL:          "http://localhost:8000",
 					Mode:         "batch",
 					BatchTimeout: time.Second,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-					},
+					Queue:        TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: true,
@@ -130,11 +104,7 @@ func TestConfigValidation(t *testing.T) {
 					URL:       "http://localhost:8000",
 					Mode:      "batch",
 					BatchSize: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-					},
+					Queue:     TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: true,
@@ -148,15 +118,11 @@ func TestConfigValidation(t *testing.T) {
 					URL:           "http://localhost:8000",
 					Mode:          "individual",
 					MaxConcurrent: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    150, // Exceeds max
-						MediumPriorityShedAt: 80,
-					},
+					Queue:         TestQueueConfigWithShedding(150, 80), // Low exceeds max=100
 				},
 			},
 			shouldError: true,
-			errorMsg:    "low_priority_shed_at (150) cannot exceed queue.max_size (100)",
+			errorMsg:    "priorities[2].shed_at (150) cannot exceed queue.max_size (100)",
 		},
 		{
 			name: "invalid_queue_thresholds_medium_exceeds_max",
@@ -166,15 +132,11 @@ func TestConfigValidation(t *testing.T) {
 					URL:           "http://localhost:8000",
 					Mode:          "individual",
 					MaxConcurrent: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    50,
-						MediumPriorityShedAt: 150, // Exceeds max
-					},
+					Queue:         TestQueueConfigWithShedding(50, 150), // Medium exceeds max=100
 				},
 			},
 			shouldError: true,
-			errorMsg:    "medium_priority_shed_at (150) cannot exceed queue.max_size (100)",
+			errorMsg:    "priorities[1].shed_at (150) cannot exceed queue.max_size (100)",
 		},
 		{
 			name: "invalid_queue_thresholds_order",
@@ -184,15 +146,11 @@ func TestConfigValidation(t *testing.T) {
 					URL:           "http://localhost:8000",
 					Mode:          "individual",
 					MaxConcurrent: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    60,
-						MediumPriorityShedAt: 50, // Less than low
-					},
+					Queue:         TestQueueConfigWithShedding(60, 50), // Low > Medium
 				},
 			},
 			shouldError: true,
-			errorMsg:    "low_priority_shed_at (60) should be less than medium_priority_shed_at (50)",
+			errorMsg:    "priorities must have decreasing shed_at values",
 		},
 		{
 			name: "invalid_port_zero",
@@ -202,11 +160,7 @@ func TestConfigValidation(t *testing.T) {
 					URL:           "http://localhost:8000",
 					Mode:          "individual",
 					MaxConcurrent: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-					},
+					Queue:         TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: true,
@@ -220,11 +174,7 @@ func TestConfigValidation(t *testing.T) {
 					URL:           "http://localhost:8000",
 					Mode:          "individual",
 					MaxConcurrent: 10,
-					Queue: QueueConfig{
-						MaxSize:              100,
-						LowPriorityShedAt:    30,
-						MediumPriorityShedAt: 60,
-					},
+					Queue:         TestQueueConfigWithShedding(30, 60),
 				},
 			},
 			shouldError: true,
@@ -287,11 +237,31 @@ upstream:
 	if cfg.Upstream.Queue.MaxSize != 1024 {
 		t.Errorf("Expected default max_size 1024, got %d", cfg.Upstream.Queue.MaxSize)
 	}
-	if cfg.Upstream.Queue.LowPriorityShedAt != 500 {
-		t.Errorf("Expected default low_priority_shed_at 500, got %d", cfg.Upstream.Queue.LowPriorityShedAt)
-	}
-	if cfg.Upstream.Queue.MediumPriorityShedAt != 800 {
-		t.Errorf("Expected default medium_priority_shed_at 800, got %d", cfg.Upstream.Queue.MediumPriorityShedAt)
+	// Check priority defaults
+	if len(cfg.Upstream.Queue.Priorities) != 3 {
+		t.Errorf("Expected 3 default priorities, got %d", len(cfg.Upstream.Queue.Priorities))
+	} else {
+		// Check Low priority (index 2, value 2)
+		if cfg.Upstream.Queue.Priorities[2].Value != 2 {
+			t.Errorf("Expected low priority value 2, got %d", cfg.Upstream.Queue.Priorities[2].Value)
+		}
+		if cfg.Upstream.Queue.Priorities[2].ShedAt != 500 {
+			t.Errorf("Expected default low_priority_shed_at 500, got %d", cfg.Upstream.Queue.Priorities[2].ShedAt)
+		}
+		// Check Medium priority (index 1, value 1)
+		if cfg.Upstream.Queue.Priorities[1].Value != 1 {
+			t.Errorf("Expected medium priority value 1, got %d", cfg.Upstream.Queue.Priorities[1].Value)
+		}
+		if cfg.Upstream.Queue.Priorities[1].ShedAt != 800 {
+			t.Errorf("Expected default medium_priority_shed_at 800, got %d", cfg.Upstream.Queue.Priorities[1].ShedAt)
+		}
+		// Check High priority (index 0, value 0)
+		if cfg.Upstream.Queue.Priorities[0].Value != 0 {
+			t.Errorf("Expected high priority value 0, got %d", cfg.Upstream.Queue.Priorities[0].Value)
+		}
+		if cfg.Upstream.Queue.Priorities[0].ShedAt != 0 {
+			t.Errorf("Expected high priority no shedding (0), got %d", cfg.Upstream.Queue.Priorities[0].ShedAt)
+		}
 	}
 	if cfg.Upstream.Queue.RequestMaxAge != 30*time.Second {
 		t.Errorf("Expected default request_max_age 30s, got %v", cfg.Upstream.Queue.RequestMaxAge)
@@ -341,13 +311,9 @@ func TestWarningsForUnusedSettings(t *testing.T) {
 			URL:           "http://localhost:8000",
 			Mode:          "individual",
 			MaxConcurrent: 10,
-			BatchSize:     10,    // Should warn
+			BatchSize:     10,          // Should warn
 			BatchTimeout:  time.Second, // Should warn
-			Queue: QueueConfig{
-				MaxSize:              100,
-				LowPriorityShedAt:    30,
-				MediumPriorityShedAt: 60,
-			},
+			Queue:         TestQueueConfigWithShedding(30, 60),
 		},
 	}
 
@@ -365,11 +331,7 @@ func TestWarningsForUnusedSettings(t *testing.T) {
 			MaxConcurrent: 20, // Should warn (not default 10)
 			BatchSize:     10,
 			BatchTimeout:  time.Second,
-			Queue: QueueConfig{
-				MaxSize:              100,
-				LowPriorityShedAt:    30,
-				MediumPriorityShedAt: 60,
-			},
+			Queue:         TestQueueConfigWithShedding(30, 60),
 		},
 	}
 

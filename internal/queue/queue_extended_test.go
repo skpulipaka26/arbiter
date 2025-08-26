@@ -25,12 +25,12 @@ func TestQueueOverflowBehavior(t *testing.T) {
 			name: "exact_capacity",
 			setup: func() *Queue {
 				cfg := config.Upstream{
-					Queue: config.QueueConfig{
-						MaxSize:              10,
-						LowPriorityShedAt:    5,
-						MediumPriorityShedAt: 8,
-						RequestMaxAge:        time.Minute,
-					},
+					Queue: func() config.QueueConfig {
+						cfg := config.TestQueueConfigWithShedding(5, 8)
+						cfg.MaxSize = 10
+						cfg.RequestMaxAge = time.Minute
+						return cfg
+					}(),
 				}
 				return New(cfg)
 			},
@@ -72,12 +72,12 @@ func TestQueueOverflowBehavior(t *testing.T) {
 			name: "graduated_shedding",
 			setup: func() *Queue {
 				cfg := config.Upstream{
-					Queue: config.QueueConfig{
-						MaxSize:              20,
-						LowPriorityShedAt:    8,
-						MediumPriorityShedAt: 15,
-						RequestMaxAge:        time.Minute,
-					},
+					Queue: func() config.QueueConfig {
+						cfg := config.TestQueueConfigWithShedding(8, 15)
+						cfg.MaxSize = 20
+						cfg.RequestMaxAge = time.Minute
+						return cfg
+					}(),
 				}
 				return New(cfg)
 			},
@@ -181,12 +181,12 @@ func TestQueueOverflowBehavior(t *testing.T) {
 // TestRapidEnqueueDequeue tests high-frequency operations
 func TestRapidEnqueueDequeue(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              1000,
-			LowPriorityShedAt:    500,
-			MediumPriorityShedAt: 800,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(500, 800)
+			cfg.MaxSize = 1000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -260,12 +260,12 @@ func TestRapidEnqueueDequeue(t *testing.T) {
 // TestStaleRequestHandling tests handling of expired requests
 func TestStaleRequestHandling(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        50 * time.Millisecond, // Very short for testing
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = 50 * time.Millisecond
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -339,12 +339,12 @@ func TestStaleRequestHandling(t *testing.T) {
 // TestCancelledContextHandling tests handling of cancelled contexts
 func TestCancelledContextHandling(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -410,12 +410,12 @@ func TestCancelledContextHandling(t *testing.T) {
 // TestQueueMetricsAccuracy verifies metrics are accurate
 func TestQueueMetricsAccuracy(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -477,12 +477,12 @@ func TestQueueMetricsAccuracy(t *testing.T) {
 // TestHeapInvariant verifies the heap maintains its invariant
 func TestHeapInvariant(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -531,12 +531,12 @@ func TestHeapInvariant(t *testing.T) {
 // TestConcurrentMetrics tests metrics under concurrent access
 func TestConcurrentMetrics(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              1000,
-			LowPriorityShedAt:    500,
-			MediumPriorityShedAt: 800,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(500, 800)
+			cfg.MaxSize = 1000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -602,12 +602,12 @@ func TestConcurrentMetrics(t *testing.T) {
 // TestMemoryManagement tests queue doesn't leak memory
 func TestMemoryManagement(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              1000,
-			LowPriorityShedAt:    500,
-			MediumPriorityShedAt: 800,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(500, 800)
+			cfg.MaxSize = 1000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -659,12 +659,12 @@ func TestMemoryManagement(t *testing.T) {
 // TestEdgeCasePriorities tests boundary priority values
 func TestEdgeCasePriorities(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -699,12 +699,12 @@ func TestEdgeCasePriorities(t *testing.T) {
 // TestQueueShutdown tests graceful shutdown
 func TestQueueShutdown(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -803,6 +803,12 @@ func TestRequestExtraction(t *testing.T) {
 		},
 	}
 
+	// Create a queue with test config
+	cfg := config.Upstream{
+		Queue: config.TestQueueConfig(),
+	}
+	q := New(cfg)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req, _ := http.NewRequest("GET", "/test", nil)
@@ -810,7 +816,7 @@ func TestRequestExtraction(t *testing.T) {
 				req.Header.Set(k, v)
 			}
 
-			queueReq := NewRequest(req)
+			queueReq := q.NewRequest(req)
 			if queueReq.Priority != tt.expectedPriority {
 				t.Errorf("Expected priority %v, got %v", tt.expectedPriority, queueReq.Priority)
 			}
@@ -821,12 +827,12 @@ func TestRequestExtraction(t *testing.T) {
 // BenchmarkEnqueue benchmarks enqueue performance
 func BenchmarkEnqueue(b *testing.B) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              10000,
-			LowPriorityShedAt:    5000,
-			MediumPriorityShedAt: 8000,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(5000, 8000)
+			cfg.MaxSize = 10000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -847,12 +853,12 @@ func BenchmarkEnqueue(b *testing.B) {
 // BenchmarkDequeue benchmarks dequeue performance
 func BenchmarkDequeue(b *testing.B) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              10000,
-			LowPriorityShedAt:    5000,
-			MediumPriorityShedAt: 8000,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(5000, 8000)
+			cfg.MaxSize = 10000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -878,12 +884,12 @@ func BenchmarkDequeue(b *testing.B) {
 // BenchmarkConcurrentOperations benchmarks concurrent enqueue/dequeue
 func BenchmarkConcurrentOperations(b *testing.B) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              10000,
-			LowPriorityShedAt:    5000,
-			MediumPriorityShedAt: 8000,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(5000, 8000)
+			cfg.MaxSize = 10000
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -910,12 +916,12 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 // TestQueueWithRealHTTPRequests tests with actual HTTP requests
 func TestQueueWithRealHTTPRequests(t *testing.T) {
 	cfg := config.Upstream{
-		Queue: config.QueueConfig{
-			MaxSize:              100,
-			LowPriorityShedAt:    50,
-			MediumPriorityShedAt: 80,
-			RequestMaxAge:        time.Minute,
-		},
+		Queue: func() config.QueueConfig {
+			cfg := config.TestQueueConfigWithShedding(50, 80)
+			cfg.MaxSize = 100
+			cfg.RequestMaxAge = time.Minute
+			return cfg
+		}(),
 	}
 	q := New(cfg)
 
@@ -939,7 +945,7 @@ func TestQueueWithRealHTTPRequests(t *testing.T) {
 		}
 		httpReq.Header.Set("Priority", r.priority)
 
-		queueReq := NewRequest(httpReq)
+		queueReq := q.NewRequest(httpReq)
 		if err := q.Enqueue(queueReq); err != nil {
 			t.Errorf("Failed to enqueue %s %s: %v", r.method, r.path, err)
 		}

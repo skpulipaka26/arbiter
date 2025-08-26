@@ -16,23 +16,15 @@ import (
 
 type Priority int
 
+// Default priority values for backward compatibility with tests
 const (
-	High Priority = iota
-	Medium
-	Low
+	High   Priority = 0
+	Medium Priority = 1
+	Low    Priority = 2
 )
 
 func (p Priority) String() string {
-	switch p {
-	case High:
-		return "high"
-	case Medium:
-		return "medium"
-	case Low:
-		return "low"
-	default:
-		return "unknown"
-	}
+	return fmt.Sprintf("priority-%d", p)
 }
 
 type Request struct {
@@ -51,17 +43,17 @@ type Response struct {
 	UpstreamURL string
 }
 
-func NewRequest(req *http.Request) *Request {
-	return NewRequestWithContext(req.Context(), req)
+func (q *Queue) NewRequest(req *http.Request) *Request {
+	return q.NewRequestWithContext(req.Context(), req)
 }
 
-func NewRequestWithContext(ctx context.Context, req *http.Request) *Request {
+func (q *Queue) NewRequestWithContext(ctx context.Context, req *http.Request) *Request {
 	ctx, cancel := context.WithCancel(ctx)
 
 	return &Request{
 		ID:           generateRequestID(),
 		HTTPRequest:  req.WithContext(ctx),
-		Priority:     extractPriority(req),
+		Priority:     q.extractPriority(req),
 		EnqueuedAt:   time.Now(),
 		ResponseChan: make(chan *Response, 1),
 		ctx:          ctx,
@@ -127,18 +119,31 @@ func (pq *PriorityQueue) Peek() *Request {
 }
 
 type Queue struct {
-	queue  *PriorityQueue
-	config *config.QueueConfig
-	mutex  sync.RWMutex
+	queue      *PriorityQueue
+	config     *config.QueueConfig
+	priorities map[string]config.PriorityLevel // Map for fast lookup by name/alias
+	mutex      sync.RWMutex
 }
 
 func New(upstream config.Upstream) *Queue {
 	pq := &PriorityQueue{}
 	heap.Init(pq)
 
+	// Build priority lookup map
+	priorities := make(map[string]config.PriorityLevel)
+	for _, p := range upstream.Queue.Priorities {
+		// Map the name
+		priorities[strings.ToLower(p.Name)] = p
+		// Map all aliases
+		for _, alias := range p.Aliases {
+			priorities[strings.ToLower(alias)] = p
+		}
+	}
+
 	q := &Queue{
-		queue:  pq,
-		config: &upstream.Queue,
+		queue:      pq,
+		config:     &upstream.Queue,
+		priorities: priorities,
 	}
 
 	return q
@@ -149,18 +154,17 @@ func (q *Queue) Enqueue(req *Request) error {
 	defer q.mutex.Unlock()
 
 	queueSize := q.queue.Len()
-	
+
 	// Check absolute max size first
 	if queueSize >= q.config.MaxSize {
 		return fmt.Errorf("queue full: at maximum capacity")
 	}
-	
+
 	// Check priority-based shedding
-	if queueSize >= q.config.LowPriorityShedAt && req.Priority == Low {
-		return fmt.Errorf("request shed due to overload")
-	}
-	if queueSize >= q.config.MediumPriorityShedAt && (req.Priority == Low || req.Priority == Medium) {
-		return fmt.Errorf("request shed due to extreme overload")
+	for _, p := range q.config.Priorities {
+		if p.ShedAt > 0 && queueSize >= p.ShedAt && int(req.Priority) >= p.Value {
+			return fmt.Errorf("request shed due to overload (priority %d, shed threshold %d)", req.Priority, p.ShedAt)
+		}
 	}
 
 	heap.Push(q.queue, req)
@@ -199,19 +203,22 @@ func (q *Queue) Length() int {
 	return q.queue.Len()
 }
 
-func extractPriority(req *http.Request) Priority {
-	priority := strings.ToLower(strings.TrimSpace(req.Header.Get("Priority")))
+func (q *Queue) extractPriority(req *http.Request) Priority {
+	priorityHeader := strings.ToLower(strings.TrimSpace(req.Header.Get("Priority")))
 
-	switch priority {
-	case "high", "urgent", "critical":
-		return High
-	case "medium", "normal", "standard":
-		return Medium
-	case "low", "background", "batch":
-		return Low
-	default:
-		return Low
+	// Look up priority in our configuration
+	if p, ok := q.priorities[priorityHeader]; ok {
+		return Priority(p.Value)
 	}
+
+	// Default to the highest priority value (lowest priority)
+	maxValue := 0
+	for _, p := range q.config.Priorities {
+		if p.Value > maxValue {
+			maxValue = p.Value
+		}
+	}
+	return Priority(maxValue)
 }
 
 func generateRequestID() string {
@@ -222,22 +229,21 @@ func (q *Queue) GetMetricsByPriority() map[string]interface{} {
 	q.mutex.RLock()
 	defer q.mutex.RUnlock()
 
-	high, medium, low := 0, 0, 0
+	// Count requests by priority value
+	counts := make(map[int]int)
 	for _, req := range *q.queue {
-		switch req.Priority {
-		case High:
-			high++
-		case Medium:
-			medium++
-		case Low:
-			low++
-		}
+		counts[int(req.Priority)]++
 	}
 
-	return map[string]interface{}{
-		"size":   q.queue.Len(),
-		"high":   high,
-		"medium": medium,
-		"low":    low,
+	// Build metrics with priority names
+	metrics := map[string]interface{}{
+		"size": q.queue.Len(),
 	}
+
+	// Map counts back to priority names
+	for _, p := range q.config.Priorities {
+		metrics[p.Name] = counts[p.Value]
+	}
+
+	return metrics
 }

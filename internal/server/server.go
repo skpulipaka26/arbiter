@@ -64,7 +64,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		WithField("remote_addr", r.RemoteAddr).
 		Info("Received request")
 
-	req := queue.NewRequestWithContext(ctx, r)
+	req := s.queue.NewRequestWithContext(ctx, r)
 	defer req.Cancel()
 
 	if s.queue.Length() >= s.config.Upstream.Queue.MaxSize {
